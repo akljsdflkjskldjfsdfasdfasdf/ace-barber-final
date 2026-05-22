@@ -2,12 +2,6 @@ import { useEffect, useState } from "react";
 import { pb, Appointment } from "../lib/pocketbase";
 import { LogOut, Calendar, Trash2, CheckCircle } from "lucide-react";
 
-const ADMIN_EMAILS = [
-  "du@gmail.com",
-  "durutovicsovljanski2006@gmail.com",
-  "ns@gmail.com",
-];
-
 interface AdminDashboardProps {
   onLogout: () => void;
 }
@@ -27,7 +21,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       setCheckingAdmin(true);
       setError("");
 
-      // Provera da li je korisnik prijavljen
       const user = pb.authStore.model;
       if (!user) {
         setError("Nema aktivne sesije. Molimo prijavite se.");
@@ -36,9 +29,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         return;
       }
 
-      // Provera admin emaila
-      if (!user.email || !ADMIN_EMAILS.includes(user.email)) {
-        setError("Pristup odbijen. Samo admin emailovi mogu pristupiti dashboardu.");
+      // Provera is_admin polja iz PocketBase (NE hardkodirani emailovi)
+      if (!user.is_admin) {
+        setError("Pristup odbijen. Nemate admin ovlašćenja.");
         setIsAdmin(false);
         setCheckingAdmin(false);
         setLoading(false);
@@ -49,7 +42,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       setCheckingAdmin(false);
       await fetchAppointments();
 
-      // PocketBase realtime (zamena za supabase channel)
       try {
         unsubscribe = await pb.collection("appointments").subscribe("*", () => {
           fetchAppointments();
@@ -96,7 +88,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     if (!isAdmin) return;
     try {
       await pb.collection("appointments").update(id, { status });
-      // PocketBase automatski ažurira `updated` polje
       setAppointments((prev) =>
         prev.map((a) => (a.id === id ? { ...a, status } : a))
       );
@@ -161,7 +152,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-12">
-        {/* Filteri */}
         <div className="flex gap-4 mb-8">
           {(["all", "booked", "completed"] as const).map((f) => (
             <button
@@ -174,8 +164,10 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               }`}
             >
               {f === "all" && `SVI (${appointments.length})`}
-              {f === "booked" && `ZAKAZANI (${appointments.filter((a) => a.status === "booked").length})`}
-              {f === "completed" && `ZAVRŠENI (${appointments.filter((a) => a.status === "completed").length})`}
+              {f === "booked" &&
+                `ZAKAZANI (${appointments.filter((a) => a.status === "booked").length})`}
+              {f === "completed" &&
+                `ZAVRŠENI (${appointments.filter((a) => a.status === "completed").length})`}
             </button>
           ))}
         </div>
@@ -219,12 +211,16 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-wide mb-1">Email</p>
-                        <p className="text-white text-sm">{appointment.user_email || "—"}</p>
+                        <p className="text-white text-sm">
+                          {appointment.user_email || "—"}
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-wide mb-1">Datum</p>
                         <p className="text-white">
-                          {new Date(appointment.appointment_date + "T00:00:00").toLocaleDateString("sr-RS", {
+                          {new Date(
+                            appointment.appointment_date + "T00:00:00"
+                          ).toLocaleDateString("sr-RS", {
                             weekday: "short",
                             month: "short",
                             day: "numeric",
