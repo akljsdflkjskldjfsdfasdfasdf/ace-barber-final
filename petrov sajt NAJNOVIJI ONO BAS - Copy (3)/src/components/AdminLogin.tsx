@@ -22,7 +22,7 @@ export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
         .collection("users")
         .authWithPassword(email, password);
 
-      // Provera is_admin polja iz PocketBase — nema emailova u kodu
+      // Provera is_admin polja iz PocketBase
       if (!authData.record.is_admin) {
         pb.authStore.clear();
         setError("Pristup odbijen. Nemate admin ovlašćenja.");
@@ -63,6 +63,7 @@ export default function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
               required
             />
           </div>
+
           <div>
             <label className="block text-neutral-400 mb-3 text-sm uppercase tracking-wide">
               Lozinka
