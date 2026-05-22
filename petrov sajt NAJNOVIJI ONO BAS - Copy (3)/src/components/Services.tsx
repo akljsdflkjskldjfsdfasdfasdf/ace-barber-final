@@ -20,7 +20,7 @@ const services = [
   },
   {
     icon: Slice,
-    title: "Beard Grooming",
+    title: "Beard styling",
     description: "Expert shaping and maintenance for a perfectly groomed beard",
     price: "700 din",
   },
