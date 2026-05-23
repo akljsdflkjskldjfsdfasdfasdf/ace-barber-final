@@ -164,7 +164,7 @@ export default function Booking() {
       const fetchBookedSlots = async () => {
         try {
           const records = await pb.collection("appointments").getFullList({
-            filter: `appointment_date = "${selectedDate}" && status = "booked"`,
+            filter: `appointment_date = "${selectedDate}" && (status = "booked" || status = "blocked")`,
             fields: "appointment_time",
           });
           setBookedSlots(new Set(records.map((r: any) => r.appointment_time)));
