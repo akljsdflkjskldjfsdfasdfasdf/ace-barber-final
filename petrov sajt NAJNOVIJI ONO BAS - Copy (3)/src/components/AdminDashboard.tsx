@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  RefreshCw,
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -23,7 +24,6 @@ const allTimeSlots = [
   "14:45","15:30","16:15","17:00","17:45","18:30","19:15",
 ];
 
-// ─── Helper: formatiraj datum ──────────────────────────────────
 function formatDateDisplay(dateStr: string) {
   return new Date(dateStr + "T00:00:00").toLocaleDateString("sr-RS", {
     weekday: "long",
@@ -116,19 +116,18 @@ function BlockingTab() {
     setBlockingLoading(true);
     setMsg({ type: "", text: "" });
     try {
-      await Promise.all(
-        [...selectedSlots].map((time) =>
-          pb.collection("appointments").create({
-            first_name: "BLOKIRANO",
-            last_name: "",
-            phone_number: "—",
-            appointment_date: blockDate,
-            appointment_time: time,
-            status: "blocked",
-            user_email: pb.authStore.model?.email || "",
-          })
-        )
-      );
+      for (const time of [...selectedSlots]) {
+        await pb.collection("appointments").create({
+          first_name: "BLOKIRANO",
+          last_name: "",
+          phone_number: "—",
+          appointment_date: blockDate,
+          appointment_time: time,
+          status: "blocked",
+          user_email: pb.authStore.model?.email || "",
+        });
+        await new Promise((r) => setTimeout(r, 60));
+      }
       setMsg({ type: "success", text: `Blokirano ${selectedSlots.size} termina.` });
       setSelectedSlots(new Set());
       const records = await pb.collection("appointments").getFullList({
@@ -160,19 +159,18 @@ function BlockingTab() {
         });
         const takenTimes = new Set(records.map((r: any) => r.appointment_time));
         const freeSlots = allTimeSlots.filter((t) => !takenTimes.has(t));
-        await Promise.all(
-          freeSlots.map((time) =>
-            pb.collection("appointments").create({
-              first_name: "BLOKIRANO",
-              last_name: "ODMOR",
-              phone_number: "—",
-              appointment_date: date,
-              appointment_time: time,
-              status: "blocked",
-              user_email: pb.authStore.model?.email || "",
-            })
-          )
-        );
+        for (const time of freeSlots) {
+          await pb.collection("appointments").create({
+            first_name: "BLOKIRANO",
+            last_name: "ODMOR",
+            phone_number: "—",
+            appointment_date: date,
+            appointment_time: time,
+            status: "blocked",
+            user_email: pb.authStore.model?.email || "",
+          });
+          await new Promise((r) => setTimeout(r, 60));
+        }
         created += freeSlots.length;
         skipped += takenTimes.size;
       }
@@ -344,7 +342,6 @@ function DayViewTab({
   const [deletingDay, setDeletingDay] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Grupiši sve termine po datumu — sortirano
   const grouped: Record<string, Appointment[]> = {};
   appointments.forEach((a) => {
     if (!grouped[a.appointment_date]) grouped[a.appointment_date] = [];
@@ -352,12 +349,10 @@ function DayViewTab({
   });
   const sortedDates = Object.keys(grouped).sort();
 
-  // Termini za izabrani dan
   const dayAppointments = (grouped[selectedDate] || []).sort((a, b) =>
     a.appointment_time.localeCompare(b.appointment_time)
   );
 
-  // Navigacija dana
   const currentIdx = sortedDates.indexOf(selectedDate);
   const prevDate = sortedDates[currentIdx - 1] || null;
   const nextDate = sortedDates[currentIdx + 1] || null;
@@ -380,7 +375,6 @@ function DayViewTab({
     try {
       await Promise.all(ids.map((id) => pb.collection("appointments").delete(id)));
       ids.forEach((id) => onDelete(id));
-      // Prebaci na sledeći/prethodni dan
       if (nextDate) setSelectedDate(nextDate);
       else if (prevDate) setSelectedDate(prevDate);
       else setSelectedDate(today);
@@ -417,7 +411,6 @@ function DayViewTab({
 
   return (
     <div className="grid md:grid-cols-[280px_1fr] gap-6 items-start">
-
       {/* ── LEVA KOLONA: lista datuma ── */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl overflow-hidden">
         <div className="p-4 border-b border-neutral-800">
@@ -475,7 +468,6 @@ function DayViewTab({
 
       {/* ── DESNA KOLONA: termini za dan ── */}
       <div>
-        {/* Header dana */}
         <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 mb-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
@@ -499,7 +491,6 @@ function DayViewTab({
                 </button>
               </div>
 
-              {/* Statistika */}
               <div className="flex gap-4 mt-2 flex-wrap">
                 {bookedCount > 0 && (
                   <span className="text-xs text-green-400 font-bold">
@@ -522,7 +513,6 @@ function DayViewTab({
               </div>
             </div>
 
-            {/* Dugme "Obriši sve" */}
             {dayAppointments.length > 0 && (
               <button
                 onClick={handleDeleteDay}
@@ -540,7 +530,6 @@ function DayViewTab({
           </div>
         </div>
 
-        {/* Lista termina */}
         {dayAppointments.length === 0 ? (
           <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-12 text-center">
             <Clock className="w-12 h-12 mx-auto mb-3 text-neutral-700" />
@@ -565,9 +554,7 @@ function DayViewTab({
                       : "border-neutral-800 hover:border-neutral-700"
                   }`}
                 >
-                  {/* Glavni red */}
                   <div className="flex items-center gap-4 p-4">
-                    {/* Vreme */}
                     <div className="w-14 shrink-0 text-center">
                       <span className="text-xl font-black tabular-nums leading-none block">
                         {apt.appointment_time.split(":")[0]}
@@ -577,10 +564,8 @@ function DayViewTab({
                       </span>
                     </div>
 
-                    {/* Separator */}
                     <div className="w-px self-stretch bg-neutral-800 shrink-0" />
 
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-black text-base truncate">
@@ -598,7 +583,6 @@ function DayViewTab({
                       )}
                     </div>
 
-                    {/* Akcije */}
                     <div className="flex items-center gap-2 shrink-0">
                       {!isBlocked && apt.status === "booked" && (
                         <button
@@ -636,7 +620,6 @@ function DayViewTab({
                     </div>
                   </div>
 
-                  {/* Expanded detalji */}
                   {isExpanded && !isBlocked && (
                     <div className="border-t border-neutral-800 bg-neutral-900/50 px-4 py-4 grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
@@ -673,6 +656,7 @@ function DayViewTab({
 export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<"days" | "list" | "blocking">("days");
   const [listFilter, setListFilter] = useState<"all" | "booked" | "completed" | "blocked">("all");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -730,6 +714,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     }
   };
 
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await fetchAppointments();
+    setRefreshing(false);
+  };
+
   const handleDelete = (id: string) => {
     setAppointments((prev) => prev.filter((a) => a.id !== id));
   };
@@ -750,7 +740,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     onLogout();
   };
 
-  // Statistike
   const bookedCount = appointments.filter((a) => a.status === "booked").length;
   const completedCount = appointments.filter((a) => a.status === "completed").length;
   const blockedCount = appointments.filter((a) => a.status === "blocked").length;
@@ -763,7 +752,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     return apt.status === listFilter;
   });
 
-  // ── Zaštita ───────────────────────────────────────────────────
   if (checkingAdmin) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black text-white">
@@ -801,13 +789,24 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             <h1 className="text-2xl font-black tracking-tighter uppercase">Admin Dashboard</h1>
             <p className="text-neutral-600 text-xs mt-0.5">{pb.authStore.model?.email}</p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2.5 bg-neutral-900 hover:bg-neutral-800 transition-colors border border-neutral-800 hover:border-neutral-600 rounded-xl text-sm font-bold"
-          >
-            <LogOut className="w-4 h-4" />
-            Odjavi se
-          </button>
+          <div className="flex items-center gap-3">
+            {/* ── REFRESH DUGME ── */}
+            <button
+              onClick={handleManualRefresh}
+              disabled={refreshing || loading}
+              title="Osveži podatke"
+              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-900 hover:bg-neutral-800 transition-colors border border-neutral-800 hover:border-neutral-600 rounded-xl text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-900 hover:bg-neutral-800 transition-colors border border-neutral-800 hover:border-neutral-600 rounded-xl text-sm font-bold"
+            >
+              <LogOut className="w-4 h-4" />
+              Odjavi se
+            </button>
+          </div>
         </div>
       </header>
 
@@ -885,7 +884,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         ) : activeTab === "blocking" ? (
           <BlockingTab />
         ) : (
-          /* ── LISTA TAB ── */
           <>
             <div className="flex gap-3 mb-6 flex-wrap">
               {(["all", "booked", "completed", "blocked"] as const).map((f) => (
