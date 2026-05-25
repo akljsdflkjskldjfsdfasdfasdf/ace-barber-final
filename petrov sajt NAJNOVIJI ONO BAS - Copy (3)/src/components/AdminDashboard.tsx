@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { pb, Appointment } from "../lib/pocketbase";
 import {
   LogOut,
@@ -71,6 +71,7 @@ function BlockingTab() {
   const [vacFrom, setVacFrom] = useState("");
   const [vacTo, setVacTo] = useState("");
   const [vacLoading, setVacLoading] = useState(false);
+  const [vacProgress, setVacProgress] = useState({ current: 0, total: 0 });
   const [msg, setMsg] = useState({ type: "", text: "" });
 
   useEffect(() => {
@@ -126,7 +127,8 @@ function BlockingTab() {
           status: "blocked",
           user_email: pb.authStore.model?.email || "",
         });
-        await new Promise((r) => setTimeout(r, 60));
+        // 300ms pauza između zahteva – sprečava blokiranje IP-a
+        await new Promise((r) => setTimeout(r, 300));
       }
       setMsg({ type: "success", text: `Blokirano ${selectedSlots.size} termina.` });
       setSelectedSlots(new Set());
@@ -151,6 +153,11 @@ function BlockingTab() {
     const dates = getDatesInRange(vacFrom, vacTo);
     let created = 0;
     let skipped = 0;
+
+    // Ukupan broj termina za progress bar
+    const totalSlots = dates.length * allTimeSlots.length;
+    setVacProgress({ current: 0, total: totalSlots });
+
     try {
       for (const date of dates) {
         const records = await pb.collection("appointments").getFullList({
@@ -159,6 +166,7 @@ function BlockingTab() {
         });
         const takenTimes = new Set(records.map((r: any) => r.appointment_time));
         const freeSlots = allTimeSlots.filter((t) => !takenTimes.has(t));
+
         for (const time of freeSlots) {
           await pb.collection("appointments").create({
             first_name: "BLOKIRANO",
@@ -169,10 +177,15 @@ function BlockingTab() {
             status: "blocked",
             user_email: pb.authStore.model?.email || "",
           });
-          await new Promise((r) => setTimeout(r, 60));
+          created++;
+          // 300ms između zahteva – KRITIČNO da ne blokira IP
+          await new Promise((r) => setTimeout(r, 300));
+          setVacProgress((p) => ({ ...p, current: p.current + 1 }));
         }
-        created += freeSlots.length;
         skipped += takenTimes.size;
+
+        // Dodatna pauza između dana (500ms)
+        await new Promise((r) => setTimeout(r, 500));
       }
       setMsg({
         type: "success",
@@ -184,7 +197,13 @@ function BlockingTab() {
       setMsg({ type: "error", text: "Greška pri blokiranju odmora." });
     }
     setVacLoading(false);
+    setVacProgress({ current: 0, total: 0 });
   };
+
+  const vacProgressPct =
+    vacProgress.total > 0
+      ? Math.round((vacProgress.current / vacProgress.total) * 100)
+      : 0;
 
   return (
     <div className="space-y-6">
@@ -221,7 +240,8 @@ function BlockingTab() {
                 type="date"
                 value={vacFrom}
                 onChange={(e) => setVacFrom(e.target.value)}
-                className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm"
+                disabled={vacLoading}
+                className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
               />
             </div>
             <div>
@@ -230,7 +250,8 @@ function BlockingTab() {
                 type="date"
                 value={vacTo}
                 onChange={(e) => setVacTo(e.target.value)}
-                className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm"
+                disabled={vacLoading}
+                className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
               />
             </div>
           </div>
@@ -240,13 +261,33 @@ function BlockingTab() {
               {getDatesInRange(vacFrom, vacTo).length * allTimeSlots.length} termina maks.
             </p>
           )}
+
+          {/* Progress bar tokom blokiranja odmora */}
+          {vacLoading && vacProgress.total > 0 && (
+            <div className="mb-4">
+              <div className="flex justify-between text-xs text-neutral-500 mb-1">
+                <span>Blokiranje u toku...</span>
+                <span>{vacProgress.current} / {vacProgress.total} ({vacProgressPct}%)</span>
+              </div>
+              <div className="w-full bg-neutral-800 rounded-full h-2">
+                <div
+                  className="bg-red-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${vacProgressPct}%` }}
+                />
+              </div>
+              <p className="text-xs text-neutral-600 mt-2">
+                ⚠️ Ne zatvaraj stranicu – blokiranje traje duže zbog zaštite od blokade IP-a.
+              </p>
+            </div>
+          )}
+
           <button
             onClick={handleBlockVacation}
             disabled={vacLoading || !vacFrom || !vacTo || vacFrom > vacTo}
             className="w-full py-4 bg-red-900 hover:bg-red-800 text-white font-black rounded-xl uppercase text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             <Ban className="w-4 h-4" />
-            {vacLoading ? "Blokiranje..." : "Blokiraj odmor"}
+            {vacLoading ? `Blokiranje... ${vacProgressPct}%` : "Blokiraj odmor"}
           </button>
         </div>
 
@@ -327,17 +368,18 @@ function BlockingTab() {
 // ═══════════════════════════════════════════════════════════════
 function DayViewTab({
   appointments,
+  selectedDate,
+  onSelectDate,
   onDelete,
   onStatusChange,
-  onRefresh,
 }: {
   appointments: Appointment[];
+  selectedDate: string;
+  onSelectDate: (date: string) => void;
   onDelete: (id: string) => void;
   onStatusChange: (id: string, status: string) => void;
-  onRefresh: () => void;
 }) {
   const today = getTodayISO();
-  const [selectedDate, setSelectedDate] = useState(today);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingDay, setDeletingDay] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -358,8 +400,8 @@ function DayViewTab({
   const nextDate = sortedDates[currentIdx + 1] || null;
 
   const goToDate = (dir: "prev" | "next") => {
-    if (dir === "prev" && prevDate) setSelectedDate(prevDate);
-    if (dir === "next" && nextDate) setSelectedDate(nextDate);
+    if (dir === "prev" && prevDate) onSelectDate(prevDate);
+    if (dir === "next" && nextDate) onSelectDate(nextDate);
   };
 
   const handleDeleteDay = async () => {
@@ -375,9 +417,9 @@ function DayViewTab({
     try {
       await Promise.all(ids.map((id) => pb.collection("appointments").delete(id)));
       ids.forEach((id) => onDelete(id));
-      if (nextDate) setSelectedDate(nextDate);
-      else if (prevDate) setSelectedDate(prevDate);
-      else setSelectedDate(today);
+      if (nextDate) onSelectDate(nextDate);
+      else if (prevDate) onSelectDate(prevDate);
+      else onSelectDate(today);
     } catch (err: any) {
       alert(`Greška: ${err.message}`);
     }
@@ -433,7 +475,7 @@ function DayViewTab({
               return (
                 <button
                   key={date}
-                  onClick={() => setSelectedDate(date)}
+                  onClick={() => onSelectDate(date)}
                   className={`w-full text-left px-4 py-3 border-b border-neutral-900 transition-all flex items-center justify-between gap-2 ${
                     isSelected
                       ? "bg-white text-black"
@@ -663,6 +705,38 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [checkingAdmin, setCheckingAdmin] = useState(true);
   const [error, setError] = useState("");
 
+  // ── selectedDate je ovde u parentu, ne u DayViewTab ──
+  // Tako se ne resetuje kada se appointments osvežavaju
+  const [selectedDate, setSelectedDate] = useState(getTodayISO());
+
+  // ── TIHO osvežavanje (bez loading spinnera, bez unmount-a DayViewTab) ──
+  const silentFetch = useCallback(async () => {
+    try {
+      const records = await pb.collection("appointments").getFullList({
+        sort: "+appointment_date,+appointment_time",
+      });
+      setAppointments(records as unknown as Appointment[]);
+    } catch {
+      // Tihi fail – ne prikazuje grešku korisniku
+    }
+  }, []);
+
+  // ── Inicijalno učitavanje (sa loading spinnerom) ──
+  const fetchAppointments = useCallback(async () => {
+    setLoading(true);
+    try {
+      const records = await pb.collection("appointments").getFullList({
+        sort: "+appointment_date,+appointment_time",
+      });
+      setAppointments(records as unknown as Appointment[]);
+    } catch {
+      setError("Greška pri učitavanju termina.");
+      setAppointments([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
 
@@ -686,9 +760,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       setIsAdmin(true);
       setCheckingAdmin(false);
       await fetchAppointments();
+
       try {
+        // ── Realtime koristi silentFetch – ne resetuje selectedDate ──
         unsubscribe = await pb.collection("appointments").subscribe("*", () => {
-          fetchAppointments();
+          silentFetch();
         });
       } catch (err) {
         console.error("Realtime subscription failed:", err);
@@ -697,26 +773,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
     init();
     return () => { if (unsubscribe) unsubscribe(); };
-  }, []);
-
-  const fetchAppointments = async () => {
-    setLoading(true);
-    try {
-      const records = await pb.collection("appointments").getFullList({
-        sort: "+appointment_date,+appointment_time",
-      });
-      setAppointments(records as unknown as Appointment[]);
-    } catch {
-      setError("Greška pri učitavanju termina.");
-      setAppointments([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [fetchAppointments, silentFetch]);
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
-    await fetchAppointments();
+    // ── Refresh dugme isto koristi silentFetch ──
+    await silentFetch();
     setRefreshing(false);
   };
 
@@ -790,7 +852,6 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             <p className="text-neutral-600 text-xs mt-0.5">{pb.authStore.model?.email}</p>
           </div>
           <div className="flex items-center gap-3">
-            {/* ── REFRESH DUGME ── */}
             <button
               onClick={handleManualRefresh}
               disabled={refreshing || loading}
@@ -875,11 +936,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             Učitavanje...
           </div>
         ) : activeTab === "days" ? (
+          // ── selectedDate i onSelectDate dolaze iz parenta – ne resetuju se ──
           <DayViewTab
             appointments={appointments}
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
             onDelete={handleDelete}
             onStatusChange={handleStatusChange}
-            onRefresh={fetchAppointments}
           />
         ) : activeTab === "blocking" ? (
           <BlockingTab />
