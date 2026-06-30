@@ -82,7 +82,7 @@ export default function Footer() {
         </div>
 
         <div className="border-t border-border pt-8 text-center text-sm text-muted-foreground">
-          © {new Date().getFullYear()} ACE STUDIO. All rights reserved.
+          © {new Date().getFullYear()} ACE STUDIO BARBER. All rights reserved.
         </div>
       </div>
     </footer>

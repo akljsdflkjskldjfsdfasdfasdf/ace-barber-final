@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { animate, useInView } from "framer-motion";
-import { Star, Users } from "lucide-react";
+import { Award, Star, Users } from "lucide-react";
 import Reveal from "./Reveal";
+
+const formatK = (v: number) =>
+  v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : Math.round(v).toString();
 
 interface Stat {
   icon: typeof Users;
   to: number;
   suffix?: string;
   decimals?: number;
+  format?: (v: number) => string;
   label: string;
 }
 
 const stats: Stat[] = [
-  { icon: Users, to: 500, suffix: "+", label: "Zadovoljnih klijenata" },
+  { icon: Users, to: 2000, suffix: "+", format: formatK, label: "Zadovoljnih klijenata" },
+  { icon: Award, to: 6, suffix: "+", label: "Godina iskustva" },
   { icon: Star, to: 4.9, decimals: 1, label: "Prosečna ocena" },
 ];
 
@@ -20,10 +25,12 @@ function Counter({
   to,
   suffix = "",
   decimals = 0,
+  format,
 }: {
   to: number;
   suffix?: string;
   decimals?: number;
+  format?: (v: number) => string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
@@ -39,12 +46,16 @@ function Counter({
     return () => controls.stop();
   }, [inView, to]);
 
-  return (
-    <span ref={ref}>
-      {value.toLocaleString("sr-RS", {
+  const text = format
+    ? format(value)
+    : value.toLocaleString("sr-RS", {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
-      })}
+      });
+
+  return (
+    <span ref={ref}>
+      {text}
       {suffix}
     </span>
   );
@@ -65,17 +76,17 @@ export default function About() {
           </h2>
         </Reveal>
 
-        <div className="mx-auto mt-12 grid max-w-md grid-cols-2 gap-5">
+        <div className="mx-auto mt-12 grid max-w-2xl grid-cols-3 gap-3 sm:gap-5">
           {stats.map((s, i) => {
             const Icon = s.icon;
             return (
               <Reveal key={s.label} delay={i * 0.1}>
-                <div className="rounded-3xl border border-border bg-card p-7 transition-colors hover:border-accent">
-                  <Icon className="mx-auto mb-4 h-7 w-7 text-accent" strokeWidth={1.6} />
-                  <div className="font-serif text-4xl font-bold text-foreground md:text-5xl">
-                    <Counter to={s.to} suffix={s.suffix} decimals={s.decimals} />
+                <div className="h-full rounded-3xl border border-border bg-card p-4 transition-colors hover:border-accent sm:p-7">
+                  <Icon className="mx-auto mb-3 h-6 w-6 text-accent sm:mb-4 sm:h-7 sm:w-7" strokeWidth={1.6} />
+                  <div className="font-serif text-3xl font-bold text-foreground sm:text-5xl">
+                    <Counter to={s.to} suffix={s.suffix} decimals={s.decimals} format={s.format} />
                   </div>
-                  <p className="mt-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <p className="mt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground sm:text-xs">
                     {s.label}
                   </p>
                 </div>

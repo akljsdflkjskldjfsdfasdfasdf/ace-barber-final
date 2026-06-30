@@ -94,12 +94,9 @@ html.lenis body {
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* Beskonačni horizontalni marquee za galeriju */
+  /* Beskonačni horizontalni marquee za galeriju (ne zaustavlja se) */
   .animate-marquee {
     animation: marquee 45s linear infinite;
-  }
-  .animate-marquee:hover {
-    animation-play-state: paused;
   }
   @keyframes marquee {
     from { transform: translateX(0); }
