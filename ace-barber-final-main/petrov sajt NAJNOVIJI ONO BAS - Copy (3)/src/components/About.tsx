@@ -16,9 +16,9 @@ interface Stat {
 }
 
 const stats: Stat[] = [
-  { icon: Users, to: 2000, suffix: "+", format: formatK, label: "Zadovoljnih klijenata" },
+  { icon: Users, to: 1000, suffix: "+", format: formatK, label: "Zadovoljnih klijenata" },
   { icon: Award, to: 6, suffix: "+", label: "Godina iskustva" },
-  { icon: Star, to: 4.9, decimals: 1, label: "Prosečna ocena" },
+  { icon: Star, to: 5, label: "Prosečna ocena" },
 ];
 
 function Counter({
