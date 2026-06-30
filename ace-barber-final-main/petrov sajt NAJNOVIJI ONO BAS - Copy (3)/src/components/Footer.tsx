@@ -83,6 +83,15 @@ export default function Footer() {
 
         <div className="border-t border-border pt-8 text-center text-sm text-muted-foreground">
           © {new Date().getFullYear()} ACE STUDIO BARBER. All rights reserved.
+          <div className="mt-3">
+            <a
+              href="/beta"
+              aria-label="Beta verzija"
+              className="text-[10px] lowercase tracking-widest text-muted-foreground/15 transition-colors duration-300 hover:text-accent"
+            >
+              beta
+            </a>
+          </div>
         </div>
       </div>
     </footer>
