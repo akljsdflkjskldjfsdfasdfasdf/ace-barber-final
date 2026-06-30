@@ -5,10 +5,26 @@ import Hero from "./components/Hero";
 import Services from "./components/Services";
 import About from "./components/About";
 import Booking from "./components/Booking";
+import BookingBeta from "./components/BookingBeta";
 import Footer from "./components/Footer";
 import AdminLogin from "./components/AdminLogin";
 import AdminDashboard from "./components/AdminDashboard";
 import ImageCarousel from "./components/ImageCarousel";
+
+// Isti sajt; /beta verzija ima izbor frizera u rezervaciji.
+function PublicSite({ beta }: { beta: boolean }) {
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <Hero />
+      <ImageCarousel />
+      <Services />
+      <About />
+      {beta ? <BookingBeta /> : <Booking />}
+      <Footer />
+    </div>
+  );
+}
 
 function App() {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -71,17 +87,8 @@ function App() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      <Hero />
-      <ImageCarousel />
-      <Services />
-      <About />
-      <Booking />
-      <Footer />
-    </div>
-  );
+  const isBeta = window.location.pathname.replace(/\/+$/, "").endsWith("/beta");
+  return <PublicSite beta={isBeta} />;
 }
 
 export default App;
