@@ -1,5 +1,0 @@
-# 1) Proxy svih /api zahteva ka PocketBase serveru (izbegava CORS na Netlify-u)
-/api/*  https://ace-barberstudio.online/api/:splat  200
-
-# 2) SPA fallback — sve ostale rute (uključujući /beta) serviraju index.html
-/*      /index.html  200
