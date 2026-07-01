@@ -41,7 +41,7 @@ const ImageCarousel = () => {
           >
             <img
               src={imgUrl}
-              alt={`ACE Studio Barber galerija ${(index % images.length) + 1}`}
+              alt={`ACE Barber Studio galerija ${(index % images.length) + 1}`}
               loading="lazy"
               className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             />

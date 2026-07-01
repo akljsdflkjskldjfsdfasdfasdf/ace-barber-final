@@ -47,7 +47,7 @@ export default function Navbar() {
           onClick={() => go("hero")}
           className="font-serif text-xl font-bold tracking-tight text-foreground"
         >
-          ACE STUDIO <span className="text-accent">BARBER</span>
+          ACE BARBER <span className="text-accent">STUDIO</span>
         </button>
 
         {/* Desktop links */}

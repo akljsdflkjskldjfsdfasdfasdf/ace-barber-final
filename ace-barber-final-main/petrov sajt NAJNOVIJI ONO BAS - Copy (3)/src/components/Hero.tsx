@@ -99,7 +99,7 @@ export default function Hero() {
           transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
           className="font-serif text-6xl font-bold tracking-tight text-foreground md:text-8xl"
         >
-          ACE STUDIO <span className="text-gradient-gold">BARBER</span>
+          ACE BARBER <span className="text-gradient-gold">STUDIO</span>
         </motion.h1>
 
         <motion.p
