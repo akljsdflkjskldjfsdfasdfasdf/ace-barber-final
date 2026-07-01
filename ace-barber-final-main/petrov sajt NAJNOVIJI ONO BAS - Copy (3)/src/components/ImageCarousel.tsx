@@ -29,8 +29,11 @@ const ImageCarousel = () => {
   return (
     <section
       id="gallery"
-      className="overflow-hidden border-y border-border bg-background py-10"
+      className="relative overflow-hidden border-y border-border bg-background py-10"
     >
+      {/* Fade na ivicama — slike se elegantno stapaju sa pozadinom */}
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-background to-transparent md:w-32" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-background to-transparent md:w-32" />
       <div className="flex w-max animate-marquee">
         {loop.map((imgUrl, index) => (
           <button
@@ -42,7 +45,8 @@ const ImageCarousel = () => {
             <img
               src={imgUrl}
               alt={`ACE Barber Studio galerija ${(index % images.length) + 1}`}
-              loading="lazy"
+              loading={index < 4 ? "eager" : "lazy"}
+              decoding="async"
               className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             />
           </button>

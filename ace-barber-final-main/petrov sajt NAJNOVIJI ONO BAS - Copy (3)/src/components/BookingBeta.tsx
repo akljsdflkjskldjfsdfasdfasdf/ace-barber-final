@@ -589,7 +589,7 @@ export default function BookingBeta() {
             <button
               type="submit"
               disabled={loading || !selectedTime}
-              className="mt-10 w-full rounded-2xl bg-foreground py-6 text-xl font-black uppercase tracking-tight text-background shadow-xl transition-all hover:bg-accent hover:text-accent-foreground active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-shine mt-10 w-full rounded-2xl bg-foreground py-6 text-xl font-black uppercase tracking-tight text-background shadow-xl transition-all hover:bg-accent hover:text-accent-foreground active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? "Slanje..." : "Potvrdi Termin"}
             </button>

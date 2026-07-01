@@ -10,6 +10,25 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['lucide-react'],
   },
+  build: {
+    // Razdvajanje vendor biblioteka u zasebne chunk-ove:
+    // bolji keš u browseru + manji početni bundle.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          motion: ['framer-motion'],
+          gsap: ['gsap'],
+          particles: [
+            '@tsparticles/react',
+            '@tsparticles/slim',
+            '@tsparticles/engine',
+          ],
+          pocketbase: ['pocketbase'],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       // Sve /api zahteve (uključujući realtime) prosleđuje na PocketBase server.

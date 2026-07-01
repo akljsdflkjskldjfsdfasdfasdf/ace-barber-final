@@ -7,6 +7,7 @@ import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { ChevronDown } from "lucide-react";
 import { scrollToId } from "../lib/lenis";
+import Magnetic from "./Magnetic";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -37,12 +38,15 @@ export default function Hero() {
     return () => ctx.revert();
   }, []);
 
-  const options: ISourceOptions = useMemo(
-    () => ({
+  const options: ISourceOptions = useMemo(() => {
+    // Na telefonu manje čestica i bez hover interakcije — brže i štedi bateriju
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    return {
       fullScreen: { enable: false },
       fpsLimit: 60,
+      pauseOnOutsideViewport: true,
       particles: {
-        number: { value: 55, density: { enable: true } },
+        number: { value: isMobile ? 26 : 55, density: { enable: true } },
         color: { value: "#c8a24a" },
         opacity: { value: { min: 0.1, max: 0.5 } },
         size: { value: { min: 1, max: 2.6 } },
@@ -56,14 +60,15 @@ export default function Hero() {
         },
         links: { enable: false },
       },
-      interactivity: {
-        events: { onHover: { enable: true, mode: "repulse" } },
-        modes: { repulse: { distance: 90, duration: 0.4 } },
-      },
+      interactivity: isMobile
+        ? undefined
+        : {
+            events: { onHover: { enable: true, mode: "repulse" } },
+            modes: { repulse: { distance: 90, duration: 0.4 } },
+          },
       detectRetina: true,
-    }),
-    [],
-  );
+    };
+  }, []);
 
   return (
     <section
@@ -71,6 +76,8 @@ export default function Hero() {
       className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background"
     >
       <div className="absolute inset-0 bg-gradient-to-b from-muted/40 via-background to-background" />
+      {/* Zlatni glow iza naslova */}
+      <div className="hero-glow pointer-events-none absolute inset-0" />
 
       <ParticlesProvider init={particlesInit}>
         <Particles
@@ -117,18 +124,22 @@ export default function Hero() {
           transition={{ duration: 0.8, delay: 0.3, ease: "easeOut" }}
           className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row"
         >
-          <button
-            onClick={() => scrollToId("booking")}
-            className="rounded-full bg-foreground px-10 py-4 text-lg font-semibold text-background shadow-xl transition-all duration-300 hover:scale-105 hover:bg-accent hover:text-accent-foreground"
-          >
-            BOOK NOW
-          </button>
-          <button
-            onClick={() => scrollToId("services")}
-            className="rounded-full border border-border px-10 py-4 text-lg font-semibold text-foreground transition-all duration-300 hover:border-accent hover:text-accent"
-          >
-            Usluge
-          </button>
+          <Magnetic>
+            <button
+              onClick={() => scrollToId("booking")}
+              className="btn-shine rounded-full bg-foreground px-10 py-4 text-lg font-semibold text-background shadow-xl transition-colors duration-300 hover:bg-accent hover:text-accent-foreground"
+            >
+              BOOK NOW
+            </button>
+          </Magnetic>
+          <Magnetic strength={0.25}>
+            <button
+              onClick={() => scrollToId("services")}
+              className="rounded-full border border-border px-10 py-4 text-lg font-semibold text-foreground transition-colors duration-300 hover:border-accent hover:text-accent"
+            >
+              Usluge
+            </button>
+          </Magnetic>
         </motion.div>
       </div>
 
