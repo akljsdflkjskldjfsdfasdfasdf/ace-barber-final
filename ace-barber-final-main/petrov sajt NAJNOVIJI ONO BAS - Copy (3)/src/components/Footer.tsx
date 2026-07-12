@@ -34,7 +34,7 @@ export default function Footer() {
         </Reveal>
 
         <div className="mb-12 grid gap-12 pb-12 text-center md:grid-cols-3">
-          <Reveal>
+          <Reveal x={-48}>
             <h3 className="mb-4 flex items-center justify-center gap-2 text-xl font-bold text-foreground">
               <MapPin className="h-5 w-5 text-accent" />
               LOCATION
@@ -46,7 +46,7 @@ export default function Footer() {
             </p>
           </Reveal>
 
-          <Reveal delay={0.08}>
+          <Reveal delay={0.08} scale={0.9} y={20}>
             <h3 className="mb-4 flex items-center justify-center gap-2 text-xl font-bold text-foreground">
               <Clock className="h-5 w-5 text-accent" />
               WORKING HOURS
@@ -60,7 +60,7 @@ export default function Footer() {
             </p>
           </Reveal>
 
-          <Reveal delay={0.16}>
+          <Reveal delay={0.16} x={48}>
             <h3 className="mb-4 flex items-center justify-center gap-2 text-xl font-bold text-foreground">
               <Phone className="h-5 w-5 text-accent" />
               CONTACT

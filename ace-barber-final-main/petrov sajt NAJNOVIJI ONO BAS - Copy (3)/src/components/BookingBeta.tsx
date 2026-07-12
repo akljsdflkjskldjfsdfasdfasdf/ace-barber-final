@@ -375,7 +375,7 @@ export default function BookingBeta() {
       )}
 
       <div className="mx-auto max-w-2xl">
-        <Reveal className="mb-12">
+        <Reveal className="mb-12" x={-56} blur>
           <p className="mb-3 text-xs font-semibold uppercase tracking-[0.4em] text-accent">
             Rezervacija
           </p>

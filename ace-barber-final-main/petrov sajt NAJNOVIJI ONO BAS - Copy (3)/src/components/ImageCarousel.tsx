@@ -34,6 +34,13 @@ const ImageCarousel = () => {
       {/* Fade na ivicama — slike se elegantno stapaju sa pozadinom */}
       <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-background to-transparent md:w-32" />
       <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-background to-transparent md:w-32" />
+      {/* Traka blago zumira i izroni dok skroluješ do galerije */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }}
+        whileInView={{ opacity: 1, scale: 1 }}
+        viewport={{ once: true, margin: "-60px" }}
+        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+      >
       <div className="flex w-max animate-marquee">
         {loop.map((imgUrl, index) => (
           <button
@@ -52,6 +59,7 @@ const ImageCarousel = () => {
           </button>
         ))}
       </div>
+      </motion.div>
 
       {/* LIGHTBOX — uvećana slika (marquee i dalje radi u pozadini) */}
       <AnimatePresence>

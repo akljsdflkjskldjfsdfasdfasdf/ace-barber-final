@@ -70,7 +70,7 @@ export default function About() {
             O nama
           </p>
         </Reveal>
-        <Reveal delay={0.05}>
+        <Reveal delay={0.05} blur scale={0.96}>
           <h2 className="font-serif text-4xl font-bold leading-tight text-foreground md:text-5xl">
             Stil koji ostavlja utisak
           </h2>
@@ -80,7 +80,7 @@ export default function About() {
           {stats.map((s, i) => {
             const Icon = s.icon;
             return (
-              <Reveal key={s.label} delay={i * 0.1}>
+              <Reveal key={s.label} delay={i * 0.1} scale={0.82} y={18}>
                 <div className="h-full rounded-3xl border border-border bg-card p-4 transition-colors hover:border-accent sm:p-7">
                   <Icon className="mx-auto mb-3 h-6 w-6 text-accent sm:mb-4 sm:h-7 sm:w-7" strokeWidth={1.6} />
                   <div className="font-serif text-3xl font-bold text-foreground sm:text-5xl">

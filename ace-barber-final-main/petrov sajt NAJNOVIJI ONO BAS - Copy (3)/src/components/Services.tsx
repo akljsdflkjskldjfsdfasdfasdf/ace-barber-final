@@ -72,7 +72,7 @@ export default function Services() {
             Šta nudimo
           </p>
         </Reveal>
-        <Reveal delay={0.05}>
+        <Reveal delay={0.05} blur scale={0.96}>
           <h2 className="mb-20 text-center font-serif text-5xl font-bold text-foreground md:text-6xl">
             OUR SERVICES
           </h2>
@@ -85,7 +85,14 @@ export default function Services() {
           {services.map((service, index) => {
             const Icon = service.icon;
             return (
-              <Reveal key={service.title} delay={index * 0.12}>
+              // Leva kartica ulazi sleva, desna zdesna, srednja zumira odozdo
+              <Reveal
+                key={service.title}
+                delay={index * 0.12}
+                x={index === 0 ? -64 : index === 2 ? 64 : 0}
+                y={index === 1 ? 40 : 24}
+                scale={index === 1 ? 0.9 : 1}
+              >
                 <TiltCard>
                   <Icon
                     className="mb-6 h-12 w-12 text-muted-foreground transition-colors duration-300 group-hover:text-accent"
