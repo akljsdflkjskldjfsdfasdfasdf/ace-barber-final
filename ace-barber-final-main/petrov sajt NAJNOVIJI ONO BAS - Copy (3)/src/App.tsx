@@ -5,7 +5,6 @@ import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import Services from "./components/Services";
 import About from "./components/About";
-import Booking from "./components/Booking";
 import Footer from "./components/Footer";
 import ImageCarousel from "./components/ImageCarousel";
 import ScrollProgress from "./components/ScrollProgress";
@@ -27,7 +26,7 @@ function LazyFallback() {
 }
 
 // Isti sajt; /beta verzija ima izbor frizera u rezervaciji.
-function PublicSite({ beta }: { beta: boolean }) {
+function PublicSite() {
   return (
     <div className="min-h-screen bg-background">
       <ScrollProgress />
@@ -38,13 +37,9 @@ function PublicSite({ beta }: { beta: boolean }) {
       <Services />
       <MarqueeBanner />
       <About />
-      {beta ? (
-        <Suspense fallback={null}>
-          <BookingBeta />
-        </Suspense>
-      ) : (
-        <Booking />
-      )}
+      <Suspense fallback={null}>
+        <BookingBeta />
+      </Suspense>
       <Footer />
     </div>
   );
@@ -133,7 +128,7 @@ function App() {
   // pa se ulazne animacije vide tačno u trenutku otkrivanja.
   return (
     <>
-      {booted && <PublicSite beta={isBeta} />}
+      {booted && <PublicSite />}
       <AnimatePresence>
         {!booted && <Preloader onFinish={() => setBooted(true)} />}
       </AnimatePresence>

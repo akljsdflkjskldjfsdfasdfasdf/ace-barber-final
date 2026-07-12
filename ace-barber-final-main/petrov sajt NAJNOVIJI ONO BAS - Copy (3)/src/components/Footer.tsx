@@ -5,6 +5,8 @@ import { SocialLinks } from "./SocialIcons";
 export default function Footer() {
   const mapQuery = encodeURIComponent("Radnička 21 Novi Sad");
   const mapSrc = `https://maps.google.com/maps?q=${mapQuery}&output=embed`;
+  const contactEmail = "acebarberstudio@gmail.com";
+  const contactPhone = "+381 64 123 4567";
 
   return (
     <footer className="border-t border-border bg-muted/40 px-6 py-16">
@@ -64,17 +66,17 @@ export default function Footer() {
               CONTACT
             </h3>
             <p className="leading-relaxed text-muted-foreground">
-              Phone:{" "}
-              <a href="tel:+381601434008" className="hover:text-accent hover:underline">
-                (+381) 60 143-4008
+              Phone: {" "}
+              <a href={`tel:${contactPhone.replace(/\s+/g, "")}`} className="hover:text-accent hover:underline">
+                {contactPhone}
               </a>
               <br />
-              Email:{" "}
+              Email: {" "}
               <a
-                href="mailto:acestudions@gmail.com"
+                href={`mailto:${contactEmail}`}
                 className="hover:text-accent hover:underline"
               >
-                acestudions@gmail.com
+                {contactEmail}
               </a>
             </p>
             <SocialLinks className="mt-6 flex items-center justify-center gap-3" />

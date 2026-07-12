@@ -16,6 +16,8 @@ export interface Appointment {
   appointment_time: string;
   status: string;
   user_email: string;
+  barber?: string;
+  barber_name?: string;
   created: string;
   updated: string;
 }

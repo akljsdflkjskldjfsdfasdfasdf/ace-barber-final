@@ -28,9 +28,6 @@ const allTimeSlots = [
   "19:15",
 ];
 
-// Frizeri — Petar je glavni (owner) i uvek je podrazumevano izabran.
-// Slike su placeholder profesionalni portreti; zameni `img` pravim slikama
-// (npr. /slike/barbers/petar.jpg) kad ih budeš imao.
 interface Barber {
   id: string;
   name: string;
@@ -40,34 +37,27 @@ interface Barber {
 
 const barbers: Barber[] = [
   {
-    id: "petar",
-    name: "Petar Đurutović",
-    role: "Owner",
-    img: "https://randomuser.me/api/portraits/men/32.jpg",
+    id: "barber-1",
+    name: "Barber 1",
+    role: "Frizer",
+    img: "/slike/slika%20barbera%201.jpeg",
   },
   {
-    id: "nanic",
-    name: "Nanić",
-    role: "Radnik",
-    img: "https://randomuser.me/api/portraits/men/45.jpg",
+    id: "barber-2",
+    name: "Barber 2",
+    role: "Frizer",
+    img: "/slike/slika%20barbera%202.jpeg",
   },
   {
-    id: "marko",
-    name: "Marko Jović",
-    role: "Radnik",
-    img: "https://randomuser.me/api/portraits/men/52.jpg",
-  },
-  {
-    id: "stefan",
-    name: "Stefan Ilić",
-    role: "Radnik",
-    img: "https://randomuser.me/api/portraits/men/76.jpg",
+    id: "barber-3",
+    name: "Barber 3",
+    role: "Šef / Owner",
+    img: "/slike/slika%20barbera%203.jpeg",
   },
 ];
 
 export default function BookingBeta() {
-  // ─── Frizer (Petar je default) ────────────────────────────────
-  const [selectedBarber, setSelectedBarber] = useState<Barber>(barbers[0]);
+  const [selectedBarber, setSelectedBarber] = useState<Barber>(barbers[2]);
 
   // ─── Booking states ────────────────────────────────────────────
   const [firstName, setFirstName] = useState("");
@@ -199,6 +189,7 @@ export default function BookingBeta() {
         status: "booked",
         user_email: email.trim(),
         barber: selectedBarber.id,
+        barber_name: selectedBarber.name,
       });
       toast.success("Termin uspešno zakazan!", {
         description: `${selectedBarber.name} · ${selectedTime} · ${new Date(
@@ -444,7 +435,7 @@ export default function BookingBeta() {
               </div>
 
               {/* Lista frizera */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {barbers.map((b) => {
                   const active = selectedBarber.id === b.id;
                   return (

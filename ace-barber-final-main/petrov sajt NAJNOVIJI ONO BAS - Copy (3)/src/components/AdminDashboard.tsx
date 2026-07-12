@@ -779,10 +779,15 @@ function DayViewTab({
                         </span>
                       </div>
                       {!isBlocked && (
-                        <p className="text-sm text-neutral-500 mt-0.5 truncate">
-                          {apt.phone_number}
-                          {apt.user_email && ` · ${apt.user_email}`}
-                        </p>
+                        <div className="text-sm text-neutral-500 mt-0.5">
+                          <p className="truncate">
+                            {apt.phone_number}
+                            {apt.user_email && ` · ${apt.user_email}`}
+                          </p>
+                          <p className="text-xs text-accent mt-0.5">
+                            Frizer: {apt.barber_name || apt.barber || "—"}
+                          </p>
+                        </div>
                       )}
                     </div>
 
@@ -1158,7 +1163,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                             {appointment.status}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                           <div>
                             <p className="text-[10px] uppercase text-neutral-600 font-black mb-1">Telefon</p>
                             <p className="text-white">{appointment.phone_number}</p>
@@ -1166,6 +1171,10 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                           <div>
                             <p className="text-[10px] uppercase text-neutral-600 font-black mb-1">Email</p>
                             <p className="text-white truncate">{appointment.user_email || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase text-neutral-600 font-black mb-1">Frizer</p>
+                            <p className="text-white truncate">{appointment.barber_name || appointment.barber || "—"}</p>
                           </div>
                           <div>
                             <p className="text-[10px] uppercase text-neutral-600 font-black mb-1">Datum</p>
