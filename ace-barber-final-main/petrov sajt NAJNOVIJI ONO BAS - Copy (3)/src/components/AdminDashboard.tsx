@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { pb, Appointment } from "../lib/pocketbase";
+import { BARBERS, barberName } from "../lib/barbers";
 import {
   LogOut,
   Calendar,
@@ -64,7 +65,10 @@ function getDatesInRange(from: string, to: string): string[] {
 // ═══════════════════════════════════════════════════════════════
 // BLOCKING TAB
 // ═══════════════════════════════════════════════════════════════
-function BlockingTab() {
+// Blokiranje i ručna rezervacija važe SAMO za jednog frizera (barberId) —
+// svaki frizer ima svoj raspored, pa se i zauzeti termini gledaju po frizeru.
+function BlockingTab({ barberId }: { barberId: string }) {
+  const barberLabel = barberName(barberId);
   const [blockDate, setBlockDate] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
   const [bookedOnDate, setBookedOnDate] = useState<Set<string>>(new Set());
@@ -88,7 +92,7 @@ function BlockingTab() {
     const fetchTaken = async () => {
       try {
         const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${blockDate}" && (status = "booked" || status = "blocked")`,
+          filter: `appointment_date = "${blockDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
           fields: "appointment_time",
         });
         setBookedOnDate(new Set(records.map((r: any) => r.appointment_time)));
@@ -98,7 +102,7 @@ function BlockingTab() {
       }
     };
     fetchTaken();
-  }, [blockDate]);
+  }, [blockDate, barberId]);
 
   // ── Učitaj zauzete termine za datum ručne rezervacije ──
   useEffect(() => {
@@ -110,7 +114,7 @@ function BlockingTab() {
     const fetchTaken = async () => {
       try {
         const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${resDate}" && (status = "booked" || status = "blocked")`,
+          filter: `appointment_date = "${resDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
           fields: "appointment_time",
         });
         setResTaken(new Set(records.map((r: any) => r.appointment_time)));
@@ -120,7 +124,7 @@ function BlockingTab() {
       }
     };
     fetchTaken();
-  }, [resDate]);
+  }, [resDate, barberId]);
 
   const handleManualReserve = async () => {
     if (!resDate || !resSlot || !resName.trim()) {
@@ -141,16 +145,18 @@ function BlockingTab() {
         appointment_time: resSlot,
         status: "booked",
         user_email: pb.authStore.model?.email || "",
+        barber: barberId,
+        barber_name: barberLabel,
       });
       setMsg({
         type: "success",
-        text: `Termin rezervisan na ime: ${resName.trim()} (${resSlot}).`,
+        text: `Termin rezervisan na ime: ${resName.trim()} (${resSlot}) — ${barberLabel}.`,
       });
       setResName("");
       setResPhone("");
       setResSlot("");
       const records = await pb.collection("appointments").getFullList({
-        filter: `appointment_date = "${resDate}" && (status = "booked" || status = "blocked")`,
+        filter: `appointment_date = "${resDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
         fields: "appointment_time",
       });
       setResTaken(new Set(records.map((r: any) => r.appointment_time)));
@@ -199,14 +205,16 @@ function BlockingTab() {
           appointment_time: time,
           status: "blocked",
           user_email: pb.authStore.model?.email || "",
+          barber: barberId,
+          barber_name: barberLabel,
         });
         // 300ms pauza između zahteva – sprečava blokiranje IP-a
         await new Promise((r) => setTimeout(r, 300));
       }
-      setMsg({ type: "success", text: `Blokirano ${selectedSlots.size} termina.` });
+      setMsg({ type: "success", text: `Blokirano ${selectedSlots.size} termina (${barberLabel}).` });
       setSelectedSlots(new Set());
       const records = await pb.collection("appointments").getFullList({
-        filter: `appointment_date = "${blockDate}" && (status = "booked" || status = "blocked")`,
+        filter: `appointment_date = "${blockDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
         fields: "appointment_time",
       });
       setBookedOnDate(new Set(records.map((r: any) => r.appointment_time)));
@@ -234,7 +242,7 @@ function BlockingTab() {
     try {
       for (const date of dates) {
         const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${date}" && (status = "booked" || status = "blocked")`,
+          filter: `appointment_date = "${date}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
           fields: "appointment_time",
         });
         const takenTimes = new Set(records.map((r: any) => r.appointment_time));
@@ -249,6 +257,8 @@ function BlockingTab() {
             appointment_time: time,
             status: "blocked",
             user_email: pb.authStore.model?.email || "",
+            barber: barberId,
+            barber_name: barberLabel,
           });
           created++;
           // 300ms između zahteva – KRITIČNO da ne blokira IP
@@ -280,6 +290,14 @@ function BlockingTab() {
 
   return (
     <div className="space-y-6">
+      {/* Za kog frizera važi blokiranje/rezervacija */}
+      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl px-5 py-4 flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-neutral-600 uppercase font-black tracking-widest">
+          Radiš raspored za:
+        </span>
+        <span className="font-black text-white uppercase">{barberLabel}</span>
+      </div>
+
       {msg.text && (
         <div
           className={`p-4 rounded-xl border flex items-center gap-3 ${
@@ -875,17 +893,32 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   // Tako se ne resetuje kada se appointments osvežavaju
   const [selectedDate, setSelectedDate] = useState(getTodayISO());
 
+  // ── PRISTUP PO FRIZERU ──
+  // Na user nalogu u PocketBase: barber_id ("barber-1/2/3") = čije termine vidi,
+  // is_boss = true (Petar) vidi sve frizere i bira koga gleda.
+  // Nalog BEZ barber_id i BEZ is_boss ne vidi nijedan termin (ekran za podešavanje).
+  const [me, setMe] = useState(pb.authStore.model);
+  const isBoss = !!me?.is_boss;
+  const myBarberId: string = me?.barber_id || "";
+  const hasBarberAccess = isBoss || !!myBarberId;
+  const [barberView, setBarberView] = useState<string>("all"); // koristi samo šef
+  const activeBarberId = isBoss ? (barberView === "all" ? "" : barberView) : myBarberId;
+  // Blokiranje/ručna rezervacija uvek ide na KONKRETNOG frizera:
+  // šef mora da izabere frizera (ili radi za sebe), ostali rade samo za sebe.
+  const blockingBarberId = activeBarberId || myBarberId || "barber-3";
+
   // ── TIHO osvežavanje (bez loading spinnera, bez unmount-a DayViewTab) ──
   const silentFetch = useCallback(async () => {
     try {
       const records = await pb.collection("appointments").getFullList({
         sort: "+appointment_date,+appointment_time",
+        ...(activeBarberId ? { filter: `barber = "${activeBarberId}"` } : {}),
       });
       setAppointments(records as unknown as Appointment[]);
     } catch {
       // Tihi fail – ne prikazuje grešku korisniku
     }
-  }, []);
+  }, [activeBarberId]);
 
   // ── Inicijalno učitavanje (sa loading spinnerom) ──
   const fetchAppointments = useCallback(async () => {
@@ -893,6 +926,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     try {
       const records = await pb.collection("appointments").getFullList({
         sort: "+appointment_date,+appointment_time",
+        ...(activeBarberId ? { filter: `barber = "${activeBarberId}"` } : {}),
       });
       setAppointments(records as unknown as Appointment[]);
     } catch {
@@ -901,7 +935,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeBarberId]);
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -909,12 +943,21 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     const init = async () => {
       setCheckingAdmin(true);
       setError("");
-      const user = pb.authStore.model;
+      let user = pb.authStore.model;
       if (!user) {
         setError("Nema aktivne sesije. Molimo prijavite se.");
         setCheckingAdmin(false);
         setLoading(false);
         return;
+      }
+      // Osveži nalog sa servera — povlači nova polja (barber_id, is_boss)
+      // i kad su dodata POSLE poslednjeg logina, bez ponovne prijave.
+      try {
+        const refreshed = await pb.collection("users").authRefresh();
+        user = refreshed.record;
+        setMe(user);
+      } catch {
+        // Nema mreže ili istekla sesija — nastavi sa keširanim nalogom
       }
       if (!user.is_admin) {
         setError("Pristup odbijen. Nemate admin ovlašćenja.");
@@ -925,6 +968,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       }
       setIsAdmin(true);
       setCheckingAdmin(false);
+      // Bez dodeljenog frizera (i bez is_boss) NE učitavaj ničije termine
+      if (!user.is_boss && !user.barber_id) {
+        setLoading(false);
+        return;
+      }
       await fetchAppointments();
 
       try {
@@ -1008,6 +1056,35 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     );
   }
 
+  // ── Admin jeste, ali nalog nije povezan ni sa jednim frizerom ──
+  // Ne prikazujemo NIČIJE termine dok se u PocketBase ne upiše barber_id / is_boss.
+  if (!hasBarberAccess) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center px-6">
+        <div className="max-w-lg w-full text-center">
+          <AlertCircle className="w-12 h-12 mx-auto mb-4 text-yellow-500" />
+          <h2 className="text-2xl font-bold mb-4">Nalog nije povezan sa frizerom</h2>
+          <p className="text-neutral-400 mb-2">
+            Nalog <span className="text-white font-bold">{me?.email}</span> je admin,
+            ali mu nije dodeljen frizer, pa ne može da vidi termine.
+          </p>
+          <p className="text-neutral-400 mb-6 text-sm">
+            U PocketBase → kolekcija <b className="text-white">users</b> → ovaj nalog, upiši{" "}
+            <b className="text-white">barber_id</b>: <code>barber-1</code> (Marić),{" "}
+            <code>barber-2</code> (Nanić) ili <code>barber-3</code> (Petar).
+            Šefu uključi i <b className="text-white">is_boss</b>. Zatim osveži ovu stranicu.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="px-6 py-3 bg-white text-black font-bold hover:bg-neutral-200 transition rounded-xl"
+          >
+            Odjavi se
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-black text-white">
       {/* ── HEADER ── */}
@@ -1015,7 +1092,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-black tracking-tighter uppercase">Admin Dashboard</h1>
-            <p className="text-neutral-600 text-xs mt-0.5">{pb.authStore.model?.email}</p>
+            <p className="text-neutral-600 text-xs mt-0.5">
+              {me?.email}
+              {myBarberId && ` · ${barberName(myBarberId)}`}
+              {isBoss && " · ŠEF"}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -1038,6 +1119,28 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-10">
+
+        {/* ── ŠEF: izbor frizera čiji se raspored gleda ── */}
+        {isBoss && (
+          <div className="flex gap-3 mb-8 flex-wrap items-center">
+            <span className="text-xs text-neutral-600 uppercase font-black tracking-widest">
+              Frizer:
+            </span>
+            {[{ id: "all", name: "Svi" }, ...BARBERS].map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setBarberView(b.id)}
+                className={`px-5 py-2 rounded-xl font-black uppercase text-sm transition-all ${
+                  barberView === b.id
+                    ? "bg-white text-black"
+                    : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
+                }`}
+              >
+                {b.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* ── STAT KARTICE ── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
@@ -1111,7 +1214,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             onStatusChange={handleStatusChange}
           />
         ) : activeTab === "blocking" ? (
-          <BlockingTab />
+          <BlockingTab barberId={blockingBarberId} />
         ) : (
           <>
             <div className="flex gap-3 mb-6 flex-wrap">

@@ -12,6 +12,7 @@ import {
   Crown,
 } from "lucide-react";
 import Reveal from "./Reveal";
+import { BARBERS, DEFAULT_BARBER, Barber } from "../lib/barbers";
 
 const allTimeSlots = [
   "11:00",
@@ -28,36 +29,11 @@ const allTimeSlots = [
   "19:15",
 ];
 
-interface Barber {
-  id: string;
-  name: string;
-  role: string;
-  img: string;
-}
-
-const barbers: Barber[] = [
-  {
-    id: "barber-1",
-    name: "Barber 1",
-    role: "Frizer",
-    img: "/slike/slika%20barbera%201.jpeg",
-  },
-  {
-    id: "barber-2",
-    name: "Barber 2",
-    role: "Frizer",
-    img: "/slike/slika%20barbera%202.jpeg",
-  },
-  {
-    id: "barber-3",
-    name: "Barber 3",
-    role: "Šef / Owner",
-    img: "/slike/slika%20barbera%203.jpeg",
-  },
-];
+const barbers: Barber[] = BARBERS;
 
 export default function BookingBeta() {
-  const [selectedBarber, setSelectedBarber] = useState<Barber>(barbers[2]);
+  // Petar (šef) je podrazumevano izabran
+  const [selectedBarber, setSelectedBarber] = useState<Barber>(DEFAULT_BARBER);
 
   // ─── Booking states ────────────────────────────────────────────
   const [firstName, setFirstName] = useState("");
@@ -169,11 +145,17 @@ export default function BookingBeta() {
     if (
       !firstName ||
       !lastName ||
-      !phoneNumber ||
+      !phoneNumber.trim() ||
+      !email.trim() ||
       !selectedDate ||
       !selectedTime
     ) {
       toast.error("Popunite sva obavezna polja!");
+      return;
+    }
+    // Osnovna provera formata — email mora imati @ i domen
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      toast.error("Unesite ispravnu email adresu!");
       return;
     }
     setLoading(true);
@@ -428,14 +410,14 @@ export default function BookingBeta() {
                     {selectedBarber.name}
                   </p>
                   <p className="flex items-center gap-1 text-xs font-semibold text-accent">
-                    {selectedBarber.role === "Owner" && <Crown className="h-3 w-3" />}
+                    {selectedBarber.role.includes("Owner") && <Crown className="h-3 w-3" />}
                     {selectedBarber.role}
                   </p>
                 </div>
               </div>
 
-              {/* Lista frizera */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {/* Lista frizera — uvek 3 kolone da Petar (šef) stoji u sredini */}
+              <div className="grid grid-cols-3 gap-3">
                 {barbers.map((b) => {
                   const active = selectedBarber.id === b.id;
                   return (
@@ -460,7 +442,7 @@ export default function BookingBeta() {
                         {b.name}
                       </span>
                       <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                        {b.role === "Owner" && <Crown className="h-3 w-3 text-accent" />}
+                        {b.role.includes("Owner") && <Crown className="h-3 w-3 text-accent" />}
                         {b.role}
                       </span>
                     </button>
@@ -487,16 +469,18 @@ export default function BookingBeta() {
             </div>
             <input
               type="tel"
-              placeholder="Broj Telefona"
+              placeholder="Broj Telefona (obavezno)"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
+              required
               className="w-full rounded-2xl border border-border bg-card p-5 outline-none transition-all focus:border-accent"
             />
             <input
               type="email"
-              placeholder="Email (opciono)"
+              placeholder="Email (obavezno)"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              required
               className="w-full rounded-2xl border border-border bg-card p-5 outline-none transition-all focus:border-accent"
             />
 

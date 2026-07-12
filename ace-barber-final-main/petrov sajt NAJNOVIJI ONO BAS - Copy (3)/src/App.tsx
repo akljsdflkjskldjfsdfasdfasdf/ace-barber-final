@@ -122,8 +122,6 @@ function App() {
     );
   }
 
-  const isBeta = cleanPath.endsWith("/beta");
-
   // Preloader stoji preko sajta; sajt se montira tek kad je sve spremno,
   // pa se ulazne animacije vide tačno u trenutku otkrivanja.
   return (
