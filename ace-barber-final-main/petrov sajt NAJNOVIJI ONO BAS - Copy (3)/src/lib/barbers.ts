@@ -13,19 +13,19 @@ export const BARBERS: Barber[] = [
   {
     id: "barber-1",
     name: "Marić",
-    role: "Frizer",
+    role: "Barber",
     img: "/slike/slika%20barbera%201.jpeg",
   },
   {
     id: "barber-3",
     name: "Petar",
-    role: "Šef / Owner",
+    role: "Owner",
     img: "/slike/slika%20barbera%203.jpeg",
   },
   {
     id: "barber-2",
     name: "Nanić",
-    role: "Frizer",
+    role: "Barber",
     img: "/slike/slika%20barbera%202.jpeg",
   },
 ];
