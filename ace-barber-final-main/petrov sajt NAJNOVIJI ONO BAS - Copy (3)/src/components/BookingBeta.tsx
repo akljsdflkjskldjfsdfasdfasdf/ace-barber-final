@@ -12,7 +12,7 @@ import {
   Crown,
 } from "lucide-react";
 import Reveal from "./Reveal";
-import { BARBERS, DEFAULT_BARBER, Barber } from "../lib/barbers";
+import { BARBERS, Barber } from "../lib/barbers";
 
 const allTimeSlots = [
   "11:00",
@@ -32,8 +32,8 @@ const allTimeSlots = [
 const barbers: Barber[] = BARBERS;
 
 export default function BookingBeta() {
-  // Petar (šef) je podrazumevano izabran
-  const [selectedBarber, setSelectedBarber] = useState<Barber>(DEFAULT_BARBER);
+  // Frizer se bira ručno — dok nije izabran, datum i vreme su zaključani
+  const [selectedBarber, setSelectedBarber] = useState<Barber | null>(null);
 
   // ─── Booking states ────────────────────────────────────────────
   const [firstName, setFirstName] = useState("");
@@ -98,11 +98,12 @@ export default function BookingBeta() {
 
   // ─── Fetch zauzeti termini ZA IZABRANOG FRIZERA ───────────────
   useEffect(() => {
-    if (selectedDate) {
+    if (selectedDate && selectedBarber) {
+      const barberId = selectedBarber.id;
       const fetchBookedSlots = async () => {
         try {
           const records = await pb.collection("appointments").getFullList({
-            filter: `appointment_date = "${selectedDate}" && barber = "${selectedBarber.id}" && (status = "booked" || status = "blocked")`,
+            filter: `appointment_date = "${selectedDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
             fields: "appointment_time",
           });
           setBookedSlots(new Set(records.map((r: any) => r.appointment_time)));
@@ -115,7 +116,7 @@ export default function BookingBeta() {
       setSelectedTime("");
       setBookedSlots(new Set());
     }
-  }, [selectedDate, selectedBarber.id]);
+  }, [selectedDate, selectedBarber?.id]);
 
   const isDateDisabled = (date: Date | null) => {
     if (!date) return true;
@@ -139,23 +140,53 @@ export default function BookingBeta() {
     setTempTime("");
   };
 
+  // ─── Redosled koraka: frizer → ime i prezime → telefon → email ──
+  // Vraća poruku o PRVOM koraku koji fali, ili null ako je sve popunjeno.
+  const missingStep = () => {
+    if (!selectedBarber) return "Prvo izaberi frizera!";
+    if (!firstName.trim() || !lastName.trim()) return "Unesi ime i prezime!";
+    if (!phoneNumber.trim()) return "Unesi broj telefona!";
+    if (!email.trim()) return "Unesi email adresu!";
+    if (!/^\S+@\S+\.\S+$/.test(email.trim()))
+      return "Unesi ispravnu email adresu!";
+    return null;
+  };
+  const stepMsg = missingStep();
+
+  // Datum se otvara tek kad su svi podaci popunjeni
+  const handleOpenCalendar = () => {
+    if (stepMsg) {
+      toast.error(stepMsg);
+      return;
+    }
+    setShowCalendar(true);
+  };
+
+  // Vreme se otvara tek posle datuma
+  const handleOpenTime = () => {
+    if (stepMsg) {
+      toast.error(stepMsg);
+      return;
+    }
+    if (!selectedDate) {
+      toast.error("Prvo izaberi datum!");
+      return;
+    }
+    setTempTime(selectedTime);
+    setShowTimePicker(true);
+  };
+
   // ─── Submit ───────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (
-      !firstName ||
-      !lastName ||
-      !phoneNumber.trim() ||
-      !email.trim() ||
-      !selectedDate ||
-      !selectedTime
-    ) {
-      toast.error("Popunite sva obavezna polja!");
+    const msg = missingStep();
+    if (msg) {
+      toast.error(msg);
       return;
     }
-    // Osnovna provera formata — email mora imati @ i domen
-    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
-      toast.error("Unesite ispravnu email adresu!");
+    if (!selectedBarber) return; // TS guard — missingStep ovo već pokriva
+    if (!selectedDate || !selectedTime) {
+      toast.error("Izaberi datum i vreme!");
       return;
     }
     setLoading(true);
@@ -326,7 +357,7 @@ export default function BookingBeta() {
               Izaberite Vreme
             </h3>
             <p className="mb-1 text-center text-sm font-bold text-accent">
-              {selectedBarber.name}
+              {selectedBarber?.name}
             </p>
             <p className="mb-8 text-center text-sm text-muted-foreground">
               {new Date(selectedDate).toLocaleDateString("sr-RS", {
@@ -396,30 +427,46 @@ export default function BookingBeta() {
               </label>
 
               {/* Trenutno izabrani frizer */}
-              <div className="mb-4 flex items-center gap-4 rounded-2xl border border-border bg-card p-4">
-                <img
-                  src={selectedBarber.img}
-                  alt={selectedBarber.name}
-                  className="h-16 w-16 rounded-full object-cover ring-2 ring-accent"
-                />
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Tvoj frizer
-                  </p>
-                  <p className="text-lg font-bold text-foreground">
-                    {selectedBarber.name}
-                  </p>
-                  <p className="flex items-center gap-1 text-xs font-semibold text-accent">
-                    {selectedBarber.role.includes("Owner") && <Crown className="h-3 w-3" />}
-                    {selectedBarber.role}
-                  </p>
+              {selectedBarber ? (
+                <div className="mb-4 flex items-center gap-4 rounded-2xl border border-border bg-card p-4">
+                  <img
+                    src={selectedBarber.img}
+                    alt={selectedBarber.name}
+                    className="h-16 w-16 rounded-full object-cover ring-2 ring-accent"
+                  />
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Tvoj frizer
+                    </p>
+                    <p className="text-lg font-bold text-foreground">
+                      {selectedBarber.name}
+                    </p>
+                    <p className="flex items-center gap-1 text-xs font-semibold text-accent">
+                      {selectedBarber.role.includes("Owner") && <Crown className="h-3 w-3" />}
+                      {selectedBarber.role}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="mb-4 flex items-center gap-4 rounded-2xl border border-dashed border-border bg-card p-4">
+                  <div className="grid h-16 w-16 place-items-center rounded-full bg-muted">
+                    <Scissors className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Tvoj frizer
+                    </p>
+                    <p className="text-lg font-bold text-muted-foreground">
+                      Izaberi frizera ispod
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Lista frizera — uvek 3 kolone da Petar (šef) stoji u sredini */}
               <div className="grid grid-cols-3 gap-3">
                 {barbers.map((b) => {
-                  const active = selectedBarber.id === b.id;
+                  const active = selectedBarber?.id === b.id;
                   return (
                     <button
                       key={b.id}
@@ -521,8 +568,10 @@ export default function BookingBeta() {
 
             <button
               type="button"
-              onClick={() => setShowCalendar(true)}
-              className="group flex w-full items-center justify-between rounded-2xl border border-border bg-card p-5 transition-all hover:border-accent"
+              onClick={handleOpenCalendar}
+              className={`group flex w-full items-center justify-between rounded-2xl border border-border bg-card p-5 transition-all hover:border-accent ${
+                stepMsg ? "opacity-50" : ""
+              }`}
             >
               <div className="flex flex-col text-left">
                 <span className="mb-1 text-[10px] font-black uppercase text-muted-foreground group-hover:text-accent">
@@ -545,9 +594,15 @@ export default function BookingBeta() {
               <CalendarIcon className="h-6 w-6 text-muted-foreground group-hover:text-accent" />
             </button>
 
-            <div className="flex w-full items-center justify-between rounded-2xl border border-border bg-card p-5">
+            <button
+              type="button"
+              onClick={handleOpenTime}
+              className={`group flex w-full items-center justify-between rounded-2xl border border-border bg-card p-5 transition-all hover:border-accent ${
+                stepMsg || !selectedDate ? "opacity-50" : ""
+              }`}
+            >
               <div className="flex flex-col text-left">
-                <span className="mb-1 text-[10px] font-black uppercase text-muted-foreground">
+                <span className="mb-1 text-[10px] font-black uppercase text-muted-foreground group-hover:text-accent">
                   Vreme
                 </span>
                 <span
@@ -558,8 +613,8 @@ export default function BookingBeta() {
                   {selectedTime || "Izaberi vreme nakon datuma"}
                 </span>
               </div>
-              <Clock className="h-6 w-6 text-muted-foreground" />
-            </div>
+              <Clock className="h-6 w-6 text-muted-foreground group-hover:text-accent" />
+            </button>
 
             <button
               type="submit"

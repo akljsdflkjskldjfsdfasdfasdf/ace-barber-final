@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Clock,
   RefreshCw,
+  BarChart3,
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -543,6 +544,198 @@ function BlockingTab({ barberId }: { barberId: string }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// STATS TAB — mesečna statistika (vidi samo šef)
+// ═══════════════════════════════════════════════════════════════
+function StatsTab() {
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [records, setRecords] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // "2026-07" — koristi se i za filter i kao zavisnost efekta
+  const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMonth = async () => {
+      setLoading(true);
+      try {
+        const res = await pb.collection("appointments").getFullList({
+          filter: `appointment_date ~ "${monthKey}-" && (status = "booked" || status = "completed")`,
+          fields: "appointment_date,barber,status,first_name",
+        });
+        if (!cancelled) {
+          setRecords(
+            (res as unknown as Appointment[]).filter(
+              (r) => r.first_name !== "BLOKIRANO"
+            )
+          );
+        }
+      } catch {
+        if (!cancelled) setRecords([]);
+      }
+      if (!cancelled) setLoading(false);
+    };
+    fetchMonth();
+    return () => {
+      cancelled = true;
+    };
+  }, [monthKey]);
+
+  const total = records.length;
+  const bookedN = records.filter((r) => r.status === "booked").length;
+  const completedN = records.filter((r) => r.status === "completed").length;
+
+  // ── Termini po frizeru (sortirano od najprometnijeg) ──
+  const perBarber = BARBERS.map((b) => ({
+    name: b.name,
+    count: records.filter((r) => r.barber === b.id).length,
+  })).sort((a, b) => b.count - a.count);
+  const maxBarber = Math.max(1, ...perBarber.map((p) => p.count));
+
+  // ── Top 5 najprometnijih datuma ──
+  const byDate: Record<string, number> = {};
+  records.forEach((r) => {
+    byDate[r.appointment_date] = (byDate[r.appointment_date] || 0) + 1;
+  });
+  const topDays = Object.entries(byDate)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const maxDay = Math.max(1, ...topDays.map(([, c]) => c));
+
+  // ── Raspodela po danu u nedelji (Pon–Ned) ──
+  const weekdayNames = ["Pon", "Uto", "Sre", "Čet", "Pet", "Sub", "Ned"];
+  const byWeekday = new Array(7).fill(0) as number[];
+  records.forEach((r) => {
+    const d = new Date(r.appointment_date + "T00:00:00").getDay(); // 0 = nedelja
+    byWeekday[(d + 6) % 7]++;
+  });
+  const maxWd = Math.max(1, ...byWeekday);
+
+  const monthLabel = month.toLocaleDateString("sr-RS", {
+    month: "long",
+    year: "numeric",
+  });
+  const changeMonth = (dir: number) =>
+    setMonth(new Date(month.getFullYear(), month.getMonth() + dir, 1));
+
+  const Bar = ({ value, max }: { value: number; max: number }) => (
+    <div className="h-3 flex-1 overflow-hidden rounded-full bg-neutral-800">
+      <div
+        className="h-full rounded-full bg-white transition-all duration-500"
+        style={{ width: `${(value / max) * 100}%` }}
+      />
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* ── Izbor meseca + ukupno ── */}
+      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => changeMonth(-1)}
+            className="p-1.5 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-white transition-all"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <h3 className="font-black text-lg capitalize min-w-[160px] text-center">
+            {monthLabel}
+          </h3>
+          <button
+            onClick={() => changeMonth(1)}
+            className="p-1.5 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-white transition-all"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex gap-4 flex-wrap text-sm">
+          <span className="font-black text-2xl">{total} <span className="text-sm font-bold text-neutral-500">termina</span></span>
+          <span className="text-green-400 font-bold self-center">● {bookedN} zakazanih</span>
+          <span className="text-neutral-400 font-bold self-center">● {completedN} završenih</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-neutral-500 gap-3">
+          <div className="w-5 h-5 border-2 border-neutral-700 border-t-white rounded-full animate-spin" />
+          Učitavanje statistike...
+        </div>
+      ) : (
+        <>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* ── Po frizeru ── */}
+            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+              <h3 className="font-black uppercase tracking-widest text-sm mb-5">
+                Termini po frizeru
+              </h3>
+              <div className="space-y-4">
+                {perBarber.map((p) => (
+                  <div key={p.name} className="flex items-center gap-3">
+                    <span className="w-16 text-sm font-bold truncate">{p.name}</span>
+                    <Bar value={p.count} max={maxBarber} />
+                    <span className="w-10 text-right text-sm font-black tabular-nums">
+                      {p.count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Po danu u nedelji ── */}
+            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+              <h3 className="font-black uppercase tracking-widest text-sm mb-5">
+                Po danu u nedelji
+              </h3>
+              <div className="space-y-3">
+                {weekdayNames.map((wd, i) => (
+                  <div key={wd} className="flex items-center gap-3">
+                    <span className="w-16 text-sm font-bold text-neutral-400">{wd}</span>
+                    <Bar value={byWeekday[i]} max={maxWd} />
+                    <span className="w-10 text-right text-sm font-black tabular-nums">
+                      {byWeekday[i]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Najprometniji dani ── */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+            <h3 className="font-black uppercase tracking-widest text-sm mb-5">
+              Top 5 najprometnijih dana
+            </h3>
+            {topDays.length === 0 ? (
+              <p className="text-neutral-600 text-sm">Nema termina za ovaj mesec.</p>
+            ) : (
+              <div className="space-y-4">
+                {topDays.map(([date, count], idx) => (
+                  <div key={date} className="flex items-center gap-3">
+                    <span className="w-6 text-center font-black text-neutral-600">
+                      {idx + 1}.
+                    </span>
+                    <span className="w-32 text-sm font-bold capitalize">
+                      {formatDateShort(date)}
+                    </span>
+                    <Bar value={count} max={maxDay} />
+                    <span className="w-10 text-right text-sm font-black tabular-nums">
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // DAY VIEW TAB
 // ═══════════════════════════════════════════════════════════════
 function DayViewTab({
@@ -883,7 +1076,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"days" | "list" | "blocking">("days");
+  const [activeTab, setActiveTab] = useState<"days" | "list" | "blocking" | "stats">("days");
   const [listFilter, setListFilter] = useState<"all" | "booked" | "completed" | "blocked">("all");
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
@@ -1196,6 +1389,20 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             <Ban className="w-4 h-4" />
             Blokiranje
           </button>
+          {/* Statistika — vidi samo šef */}
+          {isBoss && (
+            <button
+              onClick={() => setActiveTab("stats")}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
+                activeTab === "stats"
+                  ? "bg-white text-black"
+                  : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Statistika
+            </button>
+          )}
         </div>
 
         {/* ── SADRŽAJ ── */}
@@ -1213,6 +1420,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             onDelete={handleDelete}
             onStatusChange={handleStatusChange}
           />
+        ) : activeTab === "stats" && isBoss ? (
+          <StatsTab />
         ) : activeTab === "blocking" ? (
           <BlockingTab barberId={blockingBarberId} />
         ) : (
