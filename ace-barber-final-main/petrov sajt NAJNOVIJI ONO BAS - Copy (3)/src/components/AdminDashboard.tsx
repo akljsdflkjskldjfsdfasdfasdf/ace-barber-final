@@ -62,10 +62,6 @@ function getTodayISO() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-function toISODate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 // Redosled kao u kalendaru — ponedeljak prvi, nedelja poslednja.
 // value = ono što vraća Date.getDay() (0 = nedelja).
 const WEEKDAYS = [
@@ -77,23 +73,6 @@ const WEEKDAYS = [
   { value: 6, short: "Sub", long: "subota" },
   { value: 0, short: "Ned", long: "nedelja" },
 ];
-
-// Datumi za fiksni termin: prvo SLEDEĆE pojavljivanje tog dana u nedelji,
-// pa onda svakih 7 dana. Kreće od sutra — današnji termin je najčešće
-// već prošao, pa bi samo pravio zabunu.
-function getWeekdayDates(weekday: number, weeks: number): string[] {
-  const dates: string[] = [];
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  do {
-    d.setDate(d.getDate() + 1);
-  } while (d.getDay() !== weekday);
-  for (let i = 0; i < weeks; i++) {
-    dates.push(toISODate(d));
-    d.setDate(d.getDate() + 7);
-  }
-  return dates;
-}
 
 function getDatesInRange(from: string, to: string): string[] {
   const dates: string[] = [];
@@ -142,7 +121,6 @@ function BlockingTab({ barberId }: { barberId: string }) {
   const [fixSlot, setFixSlot] = useState("");
   const [fixWeeks, setFixWeeks] = useState(12);
   const [fixLoading, setFixLoading] = useState(false);
-  const [fixProgress, setFixProgress] = useState({ current: 0, total: 0 });
   const [series, setSeries] = useState<FixedSeries[]>([]);
   const [seriesBusy, setSeriesBusy] = useState("");
 
@@ -278,62 +256,53 @@ function BlockingTab({ barberId }: { barberId: string }) {
     setFixLoading(true);
     setMsg({ type: "", text: "" });
 
-    const dates = getWeekdayDates(fixWeekday, fixWeeks);
-    const recurringId = `fix_${barberId}_${Date.now()}`;
     const parts = fixName.trim().split(/\s+/);
     const firstName = parts.shift() || fixName.trim();
     const lastName = parts.join(" ");
 
-    setFixProgress({ current: 0, total: dates.length });
-
     try {
-      // Zauzeti termini se povlače jednim upitom za ceo opseg —
-      // brže i blaže prema rate limitu nego upit po nedelji.
-      const existing = await pb.collection("appointments").getFullList({
-        filter: `barber = "${barberId}" && appointment_time = "${fixSlot}" && appointment_date >= "${dates[0]}" && appointment_date <= "${dates[dates.length - 1]}"`,
-        fields: "appointment_date",
-      });
-      const taken = new Set(existing.map((r) => r.appointment_date as string));
-
-      let created = 0;
-      for (const date of dates) {
-        if (!taken.has(date)) {
-          await pb.collection("appointments").create({
-            first_name: firstName,
-            last_name: lastName,
-            phone_number: fixPhone.trim() || "—",
-            appointment_date: date,
-            appointment_time: fixSlot,
-            status: "booked",
-            user_email: fixEmail.trim(),
+      // Ceo posao ide JEDNIM zahtevom — server upiše svih N nedelja odjednom.
+      // Ranije je ovo bila petlja sa frontenda, pa je posle ~20 zahteva
+      // udaralo u nginx rate limit (30/min) i pucalo na pola.
+      const res = await pb.send<{ created: number; skipped: number }>(
+        "/api/recurring/create",
+        {
+          method: "POST",
+          body: {
             barber: barberId,
-            barber_name: barberLabel,
-            recurring_id: recurringId,
-          });
-          created++;
-          // 300ms između zahteva – KRITIČNO da ne blokira IP
-          await new Promise((r) => setTimeout(r, 300));
-        }
-        setFixProgress((p) => ({ ...p, current: p.current + 1 }));
-      }
+            barberName: barberLabel,
+            firstName,
+            lastName,
+            phone: fixPhone.trim(),
+            email: fixEmail.trim(),
+            weekday: fixWeekday,
+            time: fixSlot,
+            weeks: fixWeeks,
+          },
+        },
+      );
 
-      const skipped = dates.length - created;
       const dayLabel = WEEKDAYS.find((w) => w.value === fixWeekday)?.long ?? "";
       setMsg({
         type: "success",
         text:
-          `Fiksni termin napravljen: ${fixName.trim()} — svaki ${dayLabel} u ${fixSlot} (${created} nedelja).` +
-          (skipped > 0 ? ` Preskočeno ${skipped} — ti termini su već bili zauzeti.` : ""),
+          `Fiksni termin napravljen: ${fixName.trim()} — svaki ${dayLabel} u ${fixSlot} (${res.created} nedelja).` +
+          (res.skipped > 0
+            ? ` Preskočeno ${res.skipped} — ti termini su već bili zauzeti.`
+            : ""),
       });
       setFixName("");
       setFixPhone("");
       setFixEmail("");
       setFixSlot("");
       await loadSeries();
-    } catch {
-      setMsg({ type: "error", text: "Greška pri pravljenju fiksnog termina." });
+    } catch (err) {
+      const detail = (err as { response?: { error?: string } })?.response?.error;
+      setMsg({
+        type: "error",
+        text: detail || "Greška pri pravljenju fiksnog termina.",
+      });
     }
-    setFixProgress({ current: 0, total: 0 });
     setFixLoading(false);
   };
 
@@ -349,21 +318,19 @@ function BlockingTab({ barberId }: { barberId: string }) {
     setSeriesBusy(s.id);
     setMsg({ type: "", text: "" });
     try {
-      const records = await pb.collection("appointments").getFullList({
-        filter: `recurring_id = "${s.id}" && appointment_date >= "${getTodayISO()}"`,
-        fields: "id",
+      // Takođe jednim zahtevom — brisanje u petlji je udaralo u rate limit.
+      const res = await pb.send<{ deleted: number }>("/api/recurring/cancel", {
+        method: "POST",
+        body: { recurringId: s.id },
       });
-      for (const r of records) {
-        await pb.collection("appointments").delete(r.id);
-        await new Promise((res) => setTimeout(res, 200));
-      }
       setMsg({
         type: "success",
-        text: `Fiksni termin za ${s.name} je otkazan (${records.length} termina oslobođeno).`,
+        text: `Fiksni termin za ${s.name} je otkazan (${res.deleted} termina oslobođeno).`,
       });
       await loadSeries();
-    } catch {
-      setMsg({ type: "error", text: "Greška pri otkazivanju serije." });
+    } catch (err) {
+      const detail = (err as { response?: { error?: string } })?.response?.error;
+      setMsg({ type: "error", text: detail || "Greška pri otkazivanju serije." });
     }
     setSeriesBusy("");
   };
@@ -841,28 +808,6 @@ function BlockingTab({ barberId }: { barberId: string }) {
             <option value={52}>52 nedelje (godinu dana)</option>
           </select>
         </div>
-
-        {fixLoading && fixProgress.total > 0 && (
-          <div className="mb-4">
-            <div className="flex justify-between text-xs text-neutral-500 mb-1">
-              <span>Upisivanje termina...</span>
-              <span>
-                {fixProgress.current} / {fixProgress.total}
-              </span>
-            </div>
-            <div className="w-full bg-neutral-800 rounded-full h-2">
-              <div
-                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                style={{
-                  width: `${Math.round((fixProgress.current / fixProgress.total) * 100)}%`,
-                }}
-              />
-            </div>
-            <p className="text-xs text-neutral-600 mt-2">
-              ⚠️ Ne zatvaraj stranicu – upis traje duže zbog zaštite od blokade IP-a.
-            </p>
-          </div>
-        )}
 
         <button
           onClick={handleCreateFixed}
