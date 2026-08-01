@@ -18,6 +18,9 @@ export interface Appointment {
   user_email: string;
   barber?: string;
   barber_name?: string;
+  // Popunjeno samo kod fiksnih (ponavljajućih) termina — povezuje sve
+  // nedeljne zapise jedne serije, da bi mogla da se otkaže odjednom.
+  recurring_id?: string;
   created: string;
   updated: string;
 }

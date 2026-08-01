@@ -10,6 +10,9 @@ out/
 .env.local
 .env*.local
 
+# SMTP nalozi frizera (lozinke) — stoje samo na serveru
+pb_mail/accounts.json
+
 # misc
 .DS_Store
 *.log

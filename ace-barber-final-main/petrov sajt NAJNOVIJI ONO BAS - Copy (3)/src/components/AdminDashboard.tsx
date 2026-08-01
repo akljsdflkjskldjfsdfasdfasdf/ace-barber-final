@@ -16,10 +16,23 @@ import {
   Clock,
   RefreshCw,
   BarChart3,
+  Repeat,
 } from "lucide-react";
 
 interface AdminDashboardProps {
   onLogout: () => void;
+}
+
+// Jedan fiksni termin, sabran iz svih nedeljnih zapisa iste serije.
+interface FixedSeries {
+  id: string; // recurring_id
+  name: string;
+  phone: string;
+  time: string;
+  weekday: number;
+  nextDate: string;
+  lastDate: string;
+  count: number;
 }
 
 const allTimeSlots = [
@@ -47,6 +60,39 @@ function formatDateShort(dateStr: string) {
 function getTodayISO() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function toISODate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Redosled kao u kalendaru — ponedeljak prvi, nedelja poslednja.
+// value = ono što vraća Date.getDay() (0 = nedelja).
+const WEEKDAYS = [
+  { value: 1, short: "Pon", long: "ponedeljak" },
+  { value: 2, short: "Uto", long: "utorak" },
+  { value: 3, short: "Sre", long: "sreda" },
+  { value: 4, short: "Čet", long: "četvrtak" },
+  { value: 5, short: "Pet", long: "petak" },
+  { value: 6, short: "Sub", long: "subota" },
+  { value: 0, short: "Ned", long: "nedelja" },
+];
+
+// Datumi za fiksni termin: prvo SLEDEĆE pojavljivanje tog dana u nedelji,
+// pa onda svakih 7 dana. Kreće od sutra — današnji termin je najčešće
+// već prošao, pa bi samo pravio zabunu.
+function getWeekdayDates(weekday: number, weeks: number): string[] {
+  const dates: string[] = [];
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  do {
+    d.setDate(d.getDate() + 1);
+  } while (d.getDay() !== weekday);
+  for (let i = 0; i < weeks; i++) {
+    dates.push(toISODate(d));
+    d.setDate(d.getDate() + 7);
+  }
+  return dates;
 }
 
 function getDatesInRange(from: string, to: string): string[] {
@@ -87,6 +133,18 @@ function BlockingTab({ barberId }: { barberId: string }) {
   const [resSlot, setResSlot] = useState("");
   const [resTaken, setResTaken] = useState<Set<string>>(new Set());
   const [resLoading, setResLoading] = useState(false);
+
+  // ── Fiksni termin (npr. svaki ponedeljak u 11h) ──
+  const [fixName, setFixName] = useState("");
+  const [fixPhone, setFixPhone] = useState("");
+  const [fixEmail, setFixEmail] = useState("");
+  const [fixWeekday, setFixWeekday] = useState(1);
+  const [fixSlot, setFixSlot] = useState("");
+  const [fixWeeks, setFixWeeks] = useState(12);
+  const [fixLoading, setFixLoading] = useState(false);
+  const [fixProgress, setFixProgress] = useState({ current: 0, total: 0 });
+  const [series, setSeries] = useState<FixedSeries[]>([]);
+  const [seriesBusy, setSeriesBusy] = useState("");
 
   useEffect(() => {
     if (!blockDate) return;
@@ -169,6 +227,145 @@ function BlockingTab({ barberId }: { barberId: string }) {
       }
     }
     setResLoading(false);
+  };
+
+  // ── Fiksni termini: učitavanje postojećih serija ──
+  const loadSeries = useCallback(async () => {
+    try {
+      const records = await pb.collection("appointments").getFullList({
+        filter: `barber = "${barberId}" && recurring_id != "" && appointment_date >= "${getTodayISO()}"`,
+        sort: "appointment_date",
+      });
+
+      const grouped = new Map<string, FixedSeries>();
+      for (const r of records as unknown as Appointment[]) {
+        const key = r.recurring_id as string;
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.count++;
+          if (r.appointment_date > existing.lastDate) {
+            existing.lastDate = r.appointment_date;
+          }
+        } else {
+          grouped.set(key, {
+            id: key,
+            name: `${r.first_name} ${r.last_name}`.trim(),
+            phone: r.phone_number,
+            time: r.appointment_time,
+            // Zapisi su sortirani po datumu, pa je prvi ujedno i sledeći termin.
+            weekday: new Date(r.appointment_date + "T12:00:00").getDay(),
+            nextDate: r.appointment_date,
+            lastDate: r.appointment_date,
+            count: 1,
+          });
+        }
+      }
+      setSeries([...grouped.values()]);
+    } catch {
+      setSeries([]);
+    }
+  }, [barberId]);
+
+  useEffect(() => {
+    loadSeries();
+  }, [loadSeries]);
+
+  const handleCreateFixed = async () => {
+    if (!fixName.trim() || !fixSlot) {
+      setMsg({ type: "error", text: "Upiši ime i izaberi termin." });
+      return;
+    }
+    setFixLoading(true);
+    setMsg({ type: "", text: "" });
+
+    const dates = getWeekdayDates(fixWeekday, fixWeeks);
+    const recurringId = `fix_${barberId}_${Date.now()}`;
+    const parts = fixName.trim().split(/\s+/);
+    const firstName = parts.shift() || fixName.trim();
+    const lastName = parts.join(" ");
+
+    setFixProgress({ current: 0, total: dates.length });
+
+    try {
+      // Zauzeti termini se povlače jednim upitom za ceo opseg —
+      // brže i blaže prema rate limitu nego upit po nedelji.
+      const existing = await pb.collection("appointments").getFullList({
+        filter: `barber = "${barberId}" && appointment_time = "${fixSlot}" && appointment_date >= "${dates[0]}" && appointment_date <= "${dates[dates.length - 1]}"`,
+        fields: "appointment_date",
+      });
+      const taken = new Set(existing.map((r) => r.appointment_date as string));
+
+      let created = 0;
+      for (const date of dates) {
+        if (!taken.has(date)) {
+          await pb.collection("appointments").create({
+            first_name: firstName,
+            last_name: lastName,
+            phone_number: fixPhone.trim() || "—",
+            appointment_date: date,
+            appointment_time: fixSlot,
+            status: "booked",
+            user_email: fixEmail.trim(),
+            barber: barberId,
+            barber_name: barberLabel,
+            recurring_id: recurringId,
+          });
+          created++;
+          // 300ms između zahteva – KRITIČNO da ne blokira IP
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        setFixProgress((p) => ({ ...p, current: p.current + 1 }));
+      }
+
+      const skipped = dates.length - created;
+      const dayLabel = WEEKDAYS.find((w) => w.value === fixWeekday)?.long ?? "";
+      setMsg({
+        type: "success",
+        text:
+          `Fiksni termin napravljen: ${fixName.trim()} — svaki ${dayLabel} u ${fixSlot} (${created} nedelja).` +
+          (skipped > 0 ? ` Preskočeno ${skipped} — ti termini su već bili zauzeti.` : ""),
+      });
+      setFixName("");
+      setFixPhone("");
+      setFixEmail("");
+      setFixSlot("");
+      await loadSeries();
+    } catch {
+      setMsg({ type: "error", text: "Greška pri pravljenju fiksnog termina." });
+    }
+    setFixProgress({ current: 0, total: 0 });
+    setFixLoading(false);
+  };
+
+  // Briše samo BUDUĆE termine serije — istorija ostaje netaknuta.
+  const handleCancelSeries = async (s: FixedSeries) => {
+    if (
+      !confirm(
+        `Otkazati fiksni termin za ${s.name} (${s.time})?\n\nObrisaće se ${s.count} budućih termina. Već odrađeni ostaju u istoriji.`,
+      )
+    ) {
+      return;
+    }
+    setSeriesBusy(s.id);
+    setMsg({ type: "", text: "" });
+    try {
+      const records = await pb.collection("appointments").getFullList({
+        filter: `recurring_id = "${s.id}" && appointment_date >= "${getTodayISO()}"`,
+        fields: "id",
+      });
+      for (const r of records) {
+        await pb.collection("appointments").delete(r.id);
+        await new Promise((res) => setTimeout(res, 200));
+      }
+      setMsg({
+        type: "success",
+        text: `Fiksni termin za ${s.name} je otkazan (${records.length} termina oslobođeno).`,
+      });
+      await loadSeries();
+    } catch {
+      setMsg({ type: "error", text: "Greška pri otkazivanju serije." });
+    }
+    setSeriesBusy("");
   };
 
   const toggleSlot = (time: string) => {
@@ -538,6 +735,184 @@ function BlockingTab({ barberId }: { barberId: string }) {
           <UserPlus className="w-4 h-4" />
           {resLoading ? "Rezervacija..." : "Rezerviši termin"}
         </button>
+      </div>
+
+      {/* FIKSNI TERMIN — stalna mušterija, isti dan i sat svake nedelje */}
+      <div className="bg-neutral-950 border border-neutral-800 p-6 rounded-2xl">
+        <h3 className="font-black uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
+          <Repeat className="w-4 h-4" />
+          Fiksni termin (stalna mušterija)
+        </h3>
+        <p className="text-neutral-500 text-xs mb-6">
+          Zaključaj isti termin svake nedelje — npr. <em>svaki ponedeljak u 11:00</em>.
+          Termini se odmah upisuju u raspored i niko drugi ne može da ih zauzme.
+          Kreće od prvog sledećeg tog dana i sam se produžava, tako da nikad ne istekne.
+        </p>
+
+        <div className="grid md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="text-xs text-neutral-500 uppercase block mb-2">Ime i prezime</label>
+            <input
+              type="text"
+              placeholder="npr. Marko Marković"
+              value={fixName}
+              onChange={(e) => setFixName(e.target.value)}
+              disabled={fixLoading}
+              className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-neutral-500 uppercase block mb-2">Telefon (opciono)</label>
+            <input
+              type="tel"
+              placeholder="npr. 060 123 4567"
+              value={fixPhone}
+              onChange={(e) => setFixPhone(e.target.value)}
+              disabled={fixLoading}
+              className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        <div className="mb-4">
+          <label className="text-xs text-neutral-500 uppercase block mb-2">
+            Email (opciono — samo za podsetnik 4h ranije)
+          </label>
+          <input
+            type="email"
+            placeholder="npr. marko@gmail.com"
+            value={fixEmail}
+            onChange={(e) => setFixEmail(e.target.value)}
+            disabled={fixLoading}
+            className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
+          />
+        </div>
+
+        <label className="text-xs text-neutral-500 uppercase block mb-2">Dan u nedelji</label>
+        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-4">
+          {WEEKDAYS.map((d) => (
+            <button
+              key={d.value}
+              type="button"
+              disabled={fixLoading}
+              onClick={() => setFixWeekday(d.value)}
+              className={`py-3 text-sm font-bold rounded-xl border-2 transition-all disabled:opacity-40 ${
+                fixWeekday === d.value
+                  ? "bg-blue-900 border-blue-500 text-blue-200"
+                  : "bg-neutral-900 border-neutral-700 text-white hover:border-white"
+              }`}
+            >
+              {d.short}
+            </button>
+          ))}
+        </div>
+
+        <label className="text-xs text-neutral-500 uppercase block mb-2">Termin</label>
+        <div className="grid grid-cols-4 gap-2 mb-4">
+          {allTimeSlots.map((time) => (
+            <button
+              key={time}
+              type="button"
+              disabled={fixLoading}
+              onClick={() => setFixSlot(fixSlot === time ? "" : time)}
+              className={`py-3 text-sm font-bold rounded-xl border-2 transition-all disabled:opacity-40 ${
+                fixSlot === time
+                  ? "bg-blue-900 border-blue-500 text-blue-200"
+                  : "bg-neutral-900 border-neutral-700 text-white hover:border-white"
+              }`}
+            >
+              {time}
+            </button>
+          ))}
+        </div>
+
+        <div className="mb-4">
+          <label className="text-xs text-neutral-500 uppercase block mb-2">Koliko nedelja unapred</label>
+          <select
+            value={fixWeeks}
+            onChange={(e) => setFixWeeks(Number(e.target.value))}
+            disabled={fixLoading}
+            className="bg-neutral-900 border border-neutral-800 p-3 w-full outline-none focus:border-white rounded-xl text-white text-sm disabled:opacity-50"
+          >
+            <option value={4}>4 nedelje (mesec dana)</option>
+            <option value={8}>8 nedelja (2 meseca)</option>
+            <option value={12}>12 nedelja (3 meseca)</option>
+            <option value={26}>26 nedelja (pola godine)</option>
+            <option value={52}>52 nedelje (godinu dana)</option>
+          </select>
+        </div>
+
+        {fixLoading && fixProgress.total > 0 && (
+          <div className="mb-4">
+            <div className="flex justify-between text-xs text-neutral-500 mb-1">
+              <span>Upisivanje termina...</span>
+              <span>
+                {fixProgress.current} / {fixProgress.total}
+              </span>
+            </div>
+            <div className="w-full bg-neutral-800 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                style={{
+                  width: `${Math.round((fixProgress.current / fixProgress.total) * 100)}%`,
+                }}
+              />
+            </div>
+            <p className="text-xs text-neutral-600 mt-2">
+              ⚠️ Ne zatvaraj stranicu – upis traje duže zbog zaštite od blokade IP-a.
+            </p>
+          </div>
+        )}
+
+        <button
+          onClick={handleCreateFixed}
+          disabled={fixLoading || !fixName.trim() || !fixSlot}
+          className="w-full py-4 bg-blue-900 hover:bg-blue-800 text-white font-black rounded-xl uppercase text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        >
+          <Repeat className="w-4 h-4" />
+          {fixLoading
+            ? "Pravljenje..."
+            : `Napravi fiksni termin${fixSlot ? ` — ${WEEKDAYS.find((w) => w.value === fixWeekday)?.short} ${fixSlot}` : ""}`}
+        </button>
+
+        {/* Aktivni fiksni termini */}
+        <div className="mt-8 pt-6 border-t border-neutral-800">
+          <h4 className="text-xs text-neutral-500 uppercase font-black tracking-widest mb-4">
+            Aktivni fiksni termini — {barberLabel}
+          </h4>
+          {series.length === 0 ? (
+            <p className="text-neutral-600 text-sm">Nema fiksnih termina.</p>
+          ) : (
+            <div className="space-y-2">
+              {series.map((s) => (
+                <div
+                  key={s.id}
+                  className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap"
+                >
+                  <div className="min-w-0">
+                    <p className="font-bold text-white truncate">{s.name}</p>
+                    <p className="text-xs text-neutral-500 mt-0.5">
+                      svaki {WEEKDAYS.find((w) => w.value === s.weekday)?.long} u{" "}
+                      <span className="text-neutral-300 font-bold">{s.time}</span>
+                      {s.phone && s.phone !== "—" && ` · ${s.phone}`}
+                    </p>
+                    <p className="text-xs text-neutral-600 mt-0.5">
+                      sledeći: {formatDateShort(s.nextDate)} · još {s.count} termina
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleCancelSeries(s)}
+                    disabled={seriesBusy === s.id}
+                    className="px-4 py-2 text-xs font-black uppercase bg-red-900/40 border border-red-900 text-red-300 hover:bg-red-900 hover:text-white rounded-lg transition-all disabled:opacity-40 flex items-center gap-2 shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {seriesBusy === s.id ? "Otkazivanje..." : "Otkaži"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

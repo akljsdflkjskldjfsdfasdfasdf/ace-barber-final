@@ -30,6 +30,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 3000,
     proxy: {
       // Sve /api zahteve (uključujući realtime) prosleđuje na PocketBase server.
       // Pošto browser priča sa localhost-om, nema CORS problema.

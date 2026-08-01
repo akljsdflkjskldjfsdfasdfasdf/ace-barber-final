@@ -2,32 +2,40 @@
 // ═══════════════════════════════════════════════════════════════
 // ACE BARBER STUDIO — mejlovi pri rezervaciji + podsetnik (cron)
 //
-// NADOGRADNJA postojećeg fajla sa servera (/opt/pocketbase/pb_hooks/main.pb.js).
 // Novo u ovoj verziji:
-//   1. NE šalje mejl za BLOKIRANE termine (ranije: blokiranje odmora
-//      = poplava mejlova berberu, po jedan za svaki blokiran slot!)
-//   2. U svim mejlovima piše KOD KOG FRIZERA je termin (sad su trojica)
+//   1. SVAKI FRIZER MOŽE DA ŠALJE SA SVOG NALOGA.
+//      PocketBase drži samo jedan globalni SMTP, pa mejlove frizera
+//      koji imaju svoj nalog šalje pb_mail/send_mail.py.
+//      Ko nema svoj nalog (Marić, dok ne da lozinku) — ide preko
+//      globalnog SMTP-a, tačno kao i do sada.
+//   2. FIKSNI (PONAVLJAJUĆI) TERMINI — cron koji produžava serije,
+//      da fiksni termin nikad ne "istekne".
 //
-// Instalacija: prekopiraj ovaj fajl preko starog na serveru:
-//   /opt/pocketbase/pb_hooks/main.pb.js
-// PocketBase sam učita izmenu, restart nije potreban.
+// PAŽNJA pri izmenama: PocketBase izvršava svaki handler u izolovanom
+// scope-u. Zajedničke funkcije NE smeju da stoje na vrhu ovog fajla —
+// moraju u modul, pa require() UNUTAR handler-a (vidi lib_mail.js).
+//
+// Instalacija: prekopiraj pb_hooks/* u /opt/pocketbase/pb_hooks/
+// PocketBase sam učita izmenu.
 // ═══════════════════════════════════════════════════════════════
 
+// ── MEJLOVI PRI REZERVACIJI ─────────────────────────────────────
 onRecordAfterCreateSuccess((e) => {
-  var BARBER_EMAIL = "acestudions@gmail.com";
+  const { sendMail, STUDIO_EMAIL } = require(`${__hooks}/lib_mail.js`);
 
   const record = e.record;
 
-  // Samo prave rezervacije — blokirani termini i BLOKIRANO zapisi se preskaču
+  // Preskoči: blokirane termine, odmor, i zapise fiksne serije.
+  // Fiksni termin se pravi za više nedelja odjednom — bez ovog uslova
+  // berberu bi stiglo 12 mejlova za jednog istog stalnog mušteriju.
   if (
     record.get("status") !== "booked" ||
-    record.get("first_name") === "BLOKIRANO"
+    record.get("first_name") === "BLOKIRANO" ||
+    record.get("recurring_id")
   ) {
     e.next();
     return;
   }
-
-  const settings = $app.settings();
 
   const firstName = record.get("first_name");
   const lastName = record.get("last_name");
@@ -35,18 +43,19 @@ onRecordAfterCreateSuccess((e) => {
   const time = record.get("appointment_time");
   const phone = record.get("phone_number");
   const userEmail = record.get("user_email");
+  const barberId = record.get("barber") || "";
   const barberName = record.get("barber_name") || "—";
 
-  const senderAddress = settings.meta.senderAddress;
-  const senderName = settings.meta.senderName || "Barbershop";
-
   // ── MEJL BERBERU ──
-  try {
-    const barberMsg = new MailerMessage();
-    barberMsg.from = { address: senderAddress, name: senderName };
-    barberMsg.to = [{ address: BARBER_EMAIL }];
-    barberMsg.subject = `Nova rezervacija — ${barberName} · ${date} u ${time}`;
-    barberMsg.html = `
+  // Ide na studijski inbox; ako frizer ima svoj nalog, send_mail.py
+  // doda i njegovu ličnu adresu (notifyBarber).
+  sendMail({
+    barber: barberId,
+    to: [STUDIO_EMAIL],
+    notifyBarber: true,
+    replyTo: userEmail || "",
+    subject: `Nova rezervacija — ${barberName} · ${date} u ${time}`,
+    html: `
       <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;background:#111;color:#fff;padding:30px;border-radius:12px;">
         <h2 style="color:#fff;border-bottom:1px solid #333;padding-bottom:16px;">Nova rezervacija</h2>
         <table style="width:100%;border-collapse:collapse;">
@@ -57,21 +66,16 @@ onRecordAfterCreateSuccess((e) => {
           <tr><td style="padding:8px 0;color:#999;">Datum:</td><td style="color:#fff;">${date}</td></tr>
           <tr><td style="padding:8px 0;color:#999;">Vreme:</td><td style="color:#fff;font-weight:bold;font-size:18px;">${time}</td></tr>
         </table>
-      </div>`;
-    $app.newMailClient().send(barberMsg);
-    console.log("Email berberu poslat!");
-  } catch (err) {
-    console.error("Greška - email berberu:", err);
-  }
+      </div>`,
+  });
 
   // ── MEJL KLIJENTU (POTVRDA) ──
   if (userEmail) {
-    try {
-      const msg = new MailerMessage();
-      msg.from = { address: senderAddress, name: senderName };
-      msg.to = [{ address: userEmail }];
-      msg.subject = `Termin potvrđen — ${date} u ${time}`;
-      msg.html = `
+    sendMail({
+      barber: barberId,
+      to: [userEmail],
+      subject: `Termin potvrđen — ${date} u ${time}`,
+      html: `
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;background:#111;color:#fff;padding:30px;border-radius:12px;">
           <h2 style="color:#fff;">Vaš termin je potvrđen ✂️</h2>
           <p style="color:#999;">Pozdrav, <strong style="color:#fff">${firstName}</strong>!</p>
@@ -81,12 +85,8 @@ onRecordAfterCreateSuccess((e) => {
             <p style="margin:8px 0;color:#999;">Vreme: <strong style="color:#fff;font-size:20px;">${time}</strong></p>
           </div>
           <p style="color:#666;font-size:12px;">Ako ste sprečeni da dođete, javite nam se telefonom.</p>
-        </div>`;
-      $app.newMailClient().send(msg);
-      console.log("Email klijentu poslat!");
-    } catch (err) {
-      console.error("Greška - email klijentu:", err);
-    }
+        </div>`,
+    });
   }
 
   e.next();
@@ -94,9 +94,7 @@ onRecordAfterCreateSuccess((e) => {
 
 // ── PODSETNIK (CRON, na svakih 15 min) — termini za tačno 4 sata ──
 cronAdd("appointment_reminders", "*/15 * * * *", () => {
-  const settings = $app.settings();
-  const senderAddress = settings.meta.senderAddress;
-  const senderName = settings.meta.senderName || "Barbershop";
+  const { sendMail } = require(`${__hooks}/lib_mail.js`);
 
   const now = new Date();
   const target = new Date(now.getTime() + 4 * 60 * 60 * 1000);
@@ -116,23 +114,22 @@ cronAdd("appointment_reminders", "*/15 * * * *", () => {
     );
 
     for (const record of records) {
-      // Blokirani zapisi imaju status "blocked" pa ne ulaze ovde,
-      // ali za svaki slučaj preskoči i BLOKIRANO
       if (record.get("first_name") === "BLOKIRANO") continue;
 
       const firstName = record.get("first_name");
       const userEmail = record.get("user_email");
       const date = record.get("appointment_date");
       const time = record.get("appointment_time");
+      const barberId = record.get("barber") || "";
       const barberName = record.get("barber_name") || "—";
 
-      if (userEmail) {
-        try {
-          const msg = new MailerMessage();
-          msg.from = { address: senderAddress, name: senderName };
-          msg.to = [{ address: userEmail }];
-          msg.subject = `Podsetnik — termin danas u ${time}`;
-          msg.html = `
+      if (!userEmail) continue;
+
+      sendMail({
+        barber: barberId,
+        to: [userEmail],
+        subject: `Podsetnik — termin danas u ${time}`,
+        html: `
             <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;background:#111;color:#fff;padding:30px;border-radius:12px;">
               <h2 style="color:#fff;">Podsetnik ⏰</h2>
               <p style="color:#999;">Pozdrav, <strong style="color:#fff">${firstName}</strong>!</p>
@@ -143,15 +140,20 @@ cronAdd("appointment_reminders", "*/15 * * * *", () => {
                 <p style="margin:8px 0;color:#999;">Vreme: <strong style="color:#fff;font-size:24px;">${time}</strong></p>
               </div>
               <p style="color:#666;font-size:12px;">Ako ste sprečeni, pozovite nas telefonom.</p>
-            </div>`;
-          $app.newMailClient().send(msg);
-          console.log("Podsetnik klijentu poslat:", userEmail);
-        } catch (err) {
-          console.error("Greška - podsetnik klijentu:", err);
-        }
-      }
+            </div>`,
+      });
     }
   } catch (err) {
-    console.error("Greška - cron:", err);
+    console.error("Greška - cron podsetnik:", err);
+  }
+});
+
+// ── FIKSNI TERMINI: produžavanje serije (CRON, svaki dan u 03:30) ──
+cronAdd("recurring_extend", "30 3 * * *", () => {
+  try {
+    const { extendRecurringSeries } = require(`${__hooks}/lib_recurring.js`);
+    extendRecurringSeries();
+  } catch (err) {
+    console.error("Greška - cron fiksni termini:", err);
   }
 });
