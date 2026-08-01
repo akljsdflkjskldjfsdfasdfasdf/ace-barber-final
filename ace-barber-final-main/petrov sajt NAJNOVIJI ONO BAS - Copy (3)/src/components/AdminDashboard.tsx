@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { pb, Appointment } from "../lib/pocketbase";
 import { BARBERS, barberName } from "../lib/barbers";
 import {
@@ -1433,6 +1433,22 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     }
   }, [activeBarberId]);
 
+  // ── Sabijanje realtime osvežavanja ──
+  // Realtime šalje po JEDAN događaj za SVAKI izmenjen zapis. Kod fiksnog
+  // termina to je 12 događaja odjednom, kod blokiranja odmora i preko 80 —
+  // a svaki je ranije pokretao preuzimanje kompletne liste termina.
+  // Pošto privacy hook radi po zapisu, to je značilo desetine hiljada
+  // izvršavanja u par sekundi i server bi ostao bez memorije.
+  // Zato se sve to sabija u JEDNO osvežavanje, 800ms posle poslednjeg događaja.
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleSilentFetch = useCallback(() => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
+    refetchTimer.current = setTimeout(() => {
+      refetchTimer.current = null;
+      silentFetch();
+    }, 800);
+  }, [silentFetch]);
+
   // ── Inicijalno učitavanje (sa loading spinnerom) ──
   const fetchAppointments = useCallback(async () => {
     setLoading(true);
@@ -1490,8 +1506,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
       try {
         // ── Realtime koristi silentFetch – ne resetuje selectedDate ──
+        // Kroz scheduleSilentFetch, da nalet događaja ne obori server.
         unsubscribe = await pb.collection("appointments").subscribe("*", () => {
-          silentFetch();
+          scheduleSilentFetch();
         });
       } catch (err) {
         console.error("Realtime subscription failed:", err);
@@ -1499,8 +1516,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     };
 
     init();
-    return () => { if (unsubscribe) unsubscribe(); };
-  }, [fetchAppointments, silentFetch]);
+    return () => {
+      if (unsubscribe) unsubscribe();
+      if (refetchTimer.current) clearTimeout(refetchTimer.current);
+    };
+  }, [fetchAppointments, scheduleSilentFetch]);
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
