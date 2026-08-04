@@ -17,6 +17,9 @@ import {
   RefreshCw,
   BarChart3,
   Repeat,
+  TrendingUp,
+  Banknote,
+  CalendarDays,
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -73,6 +76,26 @@ const WEEKDAYS = [
   { value: 6, short: "Sub", long: "subota" },
   { value: 0, short: "Ned", long: "nedelja" },
 ];
+
+// Cena jednog šišanja — od nje se računa i ostvarena zarada i prognoza.
+const PRICE_PER_CUT = 1300;
+
+// Koliko nedelja unazad se gleda da bi se izračunao prosek mušterija po danu.
+const HISTORY_WEEKS = 12;
+
+const fmtMoney = (n: number) => `${Math.round(n).toLocaleString("sr-RS")} RSD`;
+
+// Pomeranje ISO datuma ("2026-08-04") za n dana, bez vremenske zone.
+function shiftISO(iso: string, days: number) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// 0 = ponedeljak ... 6 = nedelja (Date.getDay() vraća 0 za nedelju).
+function weekdayIndex(iso: string) {
+  return (new Date(iso + "T00:00:00").getDay() + 6) % 7;
+}
 
 function getDatesInRange(from: string, to: string): string[] {
   const dates: string[] = [];
@@ -867,12 +890,20 @@ function BlockingTab({ barberId }: { barberId: string }) {
 // STATS TAB — mesečna statistika (vidi samo šef)
 // ═══════════════════════════════════════════════════════════════
 function StatsTab() {
+  const today = getTodayISO();
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const [records, setRecords] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Istorija (za prosek po danu) + narednih 7 dana (za pregled).
+  // Ne zavisi od izabranog meseca — uvek se gleda od danas.
+  const [baseRecords, setBaseRecords] = useState<Appointment[]>([]);
+  const [baseLoading, setBaseLoading] = useState(true);
+  const histFrom = shiftISO(today, -HISTORY_WEEKS * 7);
+  const weekTo = shiftISO(today, 6);
 
   // "2026-07" — koristi se i za filter i kao zavisnost efekta
   const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
@@ -904,6 +935,35 @@ function StatsTab() {
     };
   }, [monthKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const fetchBase = async () => {
+      setBaseLoading(true);
+      try {
+        const res = await pb.collection("appointments").getFullList({
+          filter: `appointment_date >= "${histFrom}" && appointment_date <= "${weekTo}" && (status = "booked" || status = "completed")`,
+          sort: "+appointment_date,+appointment_time",
+          fields:
+            "appointment_date,appointment_time,barber,status,first_name,last_name",
+        });
+        if (!cancelled) {
+          setBaseRecords(
+            (res as unknown as Appointment[]).filter(
+              (r) => r.first_name !== "BLOKIRANO"
+            )
+          );
+        }
+      } catch {
+        if (!cancelled) setBaseRecords([]);
+      }
+      if (!cancelled) setBaseLoading(false);
+    };
+    fetchBase();
+    return () => {
+      cancelled = true;
+    };
+  }, [histFrom, weekTo]);
+
   const total = records.length;
   const bookedN = records.filter((r) => r.status === "booked").length;
   const completedN = records.filter((r) => r.status === "completed").length;
@@ -933,6 +993,121 @@ function StatsTab() {
     byWeekday[(d + 6) % 7]++;
   });
   const maxWd = Math.max(1, ...byWeekday);
+
+  // ═══════════════════════════════════════════════════════════
+  // PROGNOZA — prosek mušterija po danu u nedelji iz istorije
+  // ═══════════════════════════════════════════════════════════
+  const history = baseRecords.filter((r) => r.appointment_date < today);
+  const histCountByDate: Record<string, number> = {};
+  history.forEach((r) => {
+    histCountByDate[r.appointment_date] =
+      (histCountByDate[r.appointment_date] || 0) + 1;
+  });
+
+  // Ako salon nema termina od početka prozora, prosek se računa tek od prvog
+  // termina — inače bi prazne nedelje pre otvaranja lažno obarale prosek.
+  const histDates = Object.keys(histCountByDate).sort();
+  const windowStart =
+    histDates.length && histDates[0] > histFrom ? histDates[0] : histFrom;
+
+  const wdSum = new Array(7).fill(0) as number[];
+  const wdDays = new Array(7).fill(0) as number[];
+  for (let d = windowStart; d < today; d = shiftISO(d, 1)) {
+    const i = weekdayIndex(d);
+    wdDays[i]++;
+    wdSum[i] += histCountByDate[d] || 0;
+  }
+  const wdAvg = wdSum.map((s, i) => (wdDays[i] ? s / wdDays[i] : 0));
+  const hasHistory = history.length > 0;
+
+  // Očekivan broj mušterija za jedan dan: nikad manje od već zakazanog.
+  const expectedFor = (iso: string, booked: number) =>
+    Math.max(booked, Math.round(wdAvg[weekdayIndex(iso)]));
+
+  // Rang lista dana — od najboljeg do najgoreg
+  const dayRanking = weekdayNames
+    .map((name, i) => ({
+      name,
+      long: WEEKDAYS[i].long,
+      avg: wdAvg[i],
+      sum: wdSum[i],
+      days: wdDays[i],
+    }))
+    .sort((a, b) => b.avg - a.avg);
+  const maxAvg = Math.max(0.001, ...dayRanking.map((d) => d.avg));
+
+  // ═══════════════════════════════════════════════════════════
+  // ZARADA PO NEDELJAMA MESECA (pon–ned, isečeno na mesec)
+  // ═══════════════════════════════════════════════════════════
+  const monthStart = `${monthKey}-01`;
+  const lastDayNum = new Date(
+    month.getFullYear(),
+    month.getMonth() + 1,
+    0
+  ).getDate();
+  const monthEnd = `${monthKey}-${String(lastDayNum).padStart(2, "0")}`;
+
+  const monthCountByDate: Record<string, number> = {};
+  records.forEach((r) => {
+    monthCountByDate[r.appointment_date] =
+      (monthCountByDate[r.appointment_date] || 0) + 1;
+  });
+
+  const weeks: {
+    from: string;
+    to: string;
+    done: number;
+    forecast: number;
+    isCurrent: boolean;
+  }[] = [];
+  let cursor = monthStart;
+  while (cursor <= monthEnd) {
+    // Nedelja se završava u nedelju uveče, ili ranije ako mesec pre toga istekne.
+    let weekEnd = shiftISO(cursor, 6 - weekdayIndex(cursor));
+    if (weekEnd > monthEnd) weekEnd = monthEnd;
+    let done = 0;
+    let forecast = 0;
+    for (let d = cursor; d <= weekEnd; d = shiftISO(d, 1)) {
+      const booked = monthCountByDate[d] || 0;
+      if (d < today) done += booked;
+      else forecast += expectedFor(d, booked);
+    }
+    weeks.push({
+      from: cursor,
+      to: weekEnd,
+      done,
+      forecast,
+      isCurrent: cursor <= today && today <= weekEnd,
+    });
+    cursor = shiftISO(weekEnd, 1);
+  }
+
+  const doneCuts = weeks.reduce((s, w) => s + w.done, 0);
+  const forecastCuts = weeks.reduce((s, w) => s + w.forecast, 0);
+  const earned = doneCuts * PRICE_PER_CUT;
+  const forecastMoney = forecastCuts * PRICE_PER_CUT;
+  const maxWeekMoney = Math.max(
+    1,
+    ...weeks.map((w) => (w.done + w.forecast) * PRICE_PER_CUT)
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // NAREDNIH 7 DANA — pregled termina od danas
+  // ═══════════════════════════════════════════════════════════
+  const dayCapacity = allTimeSlots.length * BARBERS.length;
+  const nextWeek = Array.from({ length: 7 }, (_, i) => shiftISO(today, i)).map(
+    (iso) => {
+      const items = baseRecords.filter((r) => r.appointment_date === iso);
+      return {
+        iso,
+        items,
+        booked: items.length,
+        expected: expectedFor(iso, items.length),
+      };
+    }
+  );
+  const weekBooked = nextWeek.reduce((s, d) => s + d.booked, 0);
+  const weekExpected = nextWeek.reduce((s, d) => s + d.expected, 0);
 
   const monthLabel = month.toLocaleDateString("sr-RS", {
     month: "long",
@@ -978,13 +1153,247 @@ function StatsTab() {
         </div>
       </div>
 
-      {loading ? (
+      {loading || baseLoading ? (
         <div className="flex items-center justify-center py-16 text-neutral-500 gap-3">
           <div className="w-5 h-5 border-2 border-neutral-700 border-t-white rounded-full animate-spin" />
           Učitavanje statistike...
         </div>
       ) : (
         <>
+          {/* ── ZARADA: ostvareno / prognoza / ukupno ── */}
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5">
+              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2 flex items-center gap-2">
+                <Banknote className="w-3.5 h-3.5" />
+                Zarađeno do sada
+              </p>
+              <p className="text-3xl font-black text-green-400">{fmtMoney(earned)}</p>
+              <p className="text-xs text-neutral-500 mt-1">
+                {doneCuts} šišanja · {fmtMoney(PRICE_PER_CUT)} po šišanju
+              </p>
+            </div>
+            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5">
+              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2 flex items-center gap-2">
+                <TrendingUp className="w-3.5 h-3.5" />
+                Prognoza do kraja meseca
+              </p>
+              <p className="text-3xl font-black text-blue-400">{fmtMoney(forecastMoney)}</p>
+              <p className="text-xs text-neutral-500 mt-1">
+                još ~{forecastCuts} šišanja
+              </p>
+            </div>
+            <div className="bg-neutral-950 border border-white/20 rounded-2xl p-5">
+              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2">
+                Ukupno projektovano
+              </p>
+              <p className="text-3xl font-black">{fmtMoney(earned + forecastMoney)}</p>
+              <p className="text-xs text-neutral-500 mt-1">
+                {doneCuts + forecastCuts} šišanja za ceo mesec
+              </p>
+            </div>
+          </div>
+
+          {!hasHistory && (
+            <div className="bg-yellow-900/20 border border-yellow-900/60 text-yellow-300 rounded-2xl p-4 text-sm flex items-start gap-3">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Još nema dovoljno istorije za prognozu — prikazuje se samo ono što je
+                već zakazano. Prosek se računa iz poslednjih {HISTORY_WEEKS} nedelja.
+              </span>
+            </div>
+          )}
+
+          {/* ── ZARADA PO NEDELJAMA MESECA ── */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+            <h3 className="font-black uppercase tracking-widest text-sm mb-1">
+              Zarada po nedeljama
+            </h3>
+            <p className="text-xs text-neutral-600 mb-5">
+              Zeleno = već zarađeno · plavo = prognoza na osnovu proseka i zakazanih termina
+            </p>
+            <div className="space-y-4">
+              {weeks.map((w, i) => {
+                const money = (w.done + w.forecast) * PRICE_PER_CUT;
+                const donePct = (w.done * PRICE_PER_CUT / maxWeekMoney) * 100;
+                const forecastPct = (w.forecast * PRICE_PER_CUT / maxWeekMoney) * 100;
+                return (
+                  <div key={w.from}>
+                    <div className="flex items-center justify-between gap-3 mb-1.5 flex-wrap">
+                      <span className="text-sm font-bold flex items-center gap-2">
+                        <span className={w.isCurrent ? "text-white" : "text-neutral-400"}>
+                          {i + 1}. nedelja
+                        </span>
+                        <span className="text-xs text-neutral-600 font-normal capitalize">
+                          {formatDateShort(w.from)} – {formatDateShort(w.to)}
+                        </span>
+                        {w.isCurrent && (
+                          <span className="px-2 py-0.5 text-[9px] font-black uppercase rounded-full bg-white text-black">
+                            tekuća
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-sm font-black tabular-nums">
+                        {fmtMoney(money)}
+                        <span className="text-xs font-bold text-neutral-600 ml-2">
+                          {w.done + w.forecast} šiš.
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-3 w-full overflow-hidden rounded-full bg-neutral-800 flex">
+                      <div
+                        className="h-full bg-green-500 transition-all duration-500"
+                        style={{ width: `${donePct}%` }}
+                      />
+                      <div
+                        className="h-full bg-blue-500/70 transition-all duration-500"
+                        style={{ width: `${forecastPct}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-neutral-600 mt-1">
+                      zarađeno {fmtMoney(w.done * PRICE_PER_CUT)}
+                      {w.forecast > 0 && ` · prognoza +${fmtMoney(w.forecast * PRICE_PER_CUT)}`}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── PROGNOZA: dani od najboljeg do najgoreg ── */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+            <h3 className="font-black uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4" />
+              Prognoza dana — od najboljeg do najgoreg
+            </h3>
+            <p className="text-xs text-neutral-600 mb-5">
+              Prosek mušterija po danu iz poslednjih {HISTORY_WEEKS} nedelja i očekivana zarada
+            </p>
+            <div className="space-y-3">
+              {dayRanking.map((d, idx) => (
+                <div key={d.name} className="flex items-center gap-3">
+                  <span
+                    className={`w-6 text-center font-black ${
+                      idx === 0 ? "text-green-400" : "text-neutral-600"
+                    }`}
+                  >
+                    {idx + 1}.
+                  </span>
+                  <span className="w-24 text-sm font-bold capitalize truncate">{d.long}</span>
+                  <Bar value={d.avg} max={maxAvg} />
+                  <span className="w-16 text-right text-sm font-black tabular-nums">
+                    ~{d.avg.toFixed(1)}
+                    <span className="text-[10px] text-neutral-600 font-bold"> muš.</span>
+                  </span>
+                  <span className="w-28 text-right text-sm font-black tabular-nums text-green-400">
+                    {fmtMoney(d.avg * PRICE_PER_CUT)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── NAREDNIH 7 DANA ── */}
+          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
+              <div>
+                <h3 className="font-black uppercase tracking-widest text-sm flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4" />
+                  Narednih 7 dana
+                </h3>
+                <p className="text-xs text-neutral-600 mt-1 capitalize">
+                  {formatDateShort(today)} – {formatDateShort(weekTo)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-2xl font-black">
+                  {weekBooked}{" "}
+                  <span className="text-xs font-bold text-neutral-500">zakazanih termina</span>
+                </p>
+                <p className="text-xs text-neutral-500 mt-0.5">
+                  ~{weekExpected} očekivano ·{" "}
+                  <span className="text-green-400 font-bold">
+                    {fmtMoney(weekExpected * PRICE_PER_CUT)}
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {nextWeek.map((d, i) => {
+                const pct = Math.min(100, (d.booked / dayCapacity) * 100);
+                const perB = BARBERS.map((b) => ({
+                  name: b.name,
+                  n: d.items.filter((r) => r.barber === b.id).length,
+                }));
+                return (
+                  <div
+                    key={d.iso}
+                    className={`rounded-xl p-4 border ${
+                      i === 0
+                        ? "bg-neutral-900 border-white/25"
+                        : "bg-neutral-900/40 border-neutral-800"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="text-sm font-black capitalize w-32 shrink-0">
+                          {formatDateShort(d.iso)}
+                        </span>
+                        {i === 0 && (
+                          <span className="px-2 py-0.5 text-[9px] font-black uppercase rounded-full bg-white text-black">
+                            danas
+                          </span>
+                        )}
+                        <span className="text-xs text-neutral-500 truncate">
+                          {perB.map((p) => `${p.name} ${p.n}`).join(" · ")}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <span className="text-sm font-black tabular-nums">
+                          {d.booked}
+                          <span className="text-xs font-bold text-neutral-600">
+                            /{dayCapacity}
+                          </span>
+                        </span>
+                        <span className="text-sm font-black tabular-nums text-green-400 w-28 text-right">
+                          {fmtMoney(d.booked * PRICE_PER_CUT)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800 mt-3">
+                      <div
+                        className="h-full rounded-full bg-white transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+
+                    {d.items.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {d.items.map((r) => (
+                          <span
+                            key={r.appointment_time + r.first_name + r.barber}
+                            className="px-2 py-1 rounded-lg bg-neutral-800 border border-neutral-700 text-[11px] font-bold"
+                          >
+                            {r.appointment_time}{" "}
+                            <span className="text-neutral-400 font-normal">
+                              {r.first_name}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-neutral-600 mt-3">
+                        Nema zakazanih termina
+                        {d.expected > 0 && ` · prognoza ~${d.expected}`}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid md:grid-cols-2 gap-6">
             {/* ── Po frizeru ── */}
             <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
