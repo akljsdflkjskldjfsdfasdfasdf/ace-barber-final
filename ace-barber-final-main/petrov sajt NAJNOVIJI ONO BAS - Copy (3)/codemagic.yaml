@@ -1,0 +1,76 @@
+# Build iOS aplikacije BEZ Mac računara.
+# Codemagic (codemagic.io) povuče ovaj projekat sa GitHub-a, napravi .ipa
+# na svom Mac-u i pošalje ga na App Store Connect.
+# Besplatno ima 500 minuta mesečno — jedan build traje ~10 minuta.
+#
+# Pre prvog pokretanja u Codemagic-u treba dodati:
+#   • Apple Developer nalog (Teams → Integrations → Developer Portal)
+#   • grupu promenljivih "appstore" sa APP_STORE_APP_ID
+workflows:
+  ios:
+    name: iOS — App Store
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: ACE Barber
+    environment:
+      vars:
+        BUNDLE_ID: "online.acebarberstudio.app"
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+      node: 22.15.1
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Instalacija paketa
+        script: npm ci
+      - name: Build sajta i sinhronizacija sa iOS projektom
+        script: |
+          npm run build
+          npx cap sync ios
+      - name: Instalacija CocoaPods zavisnosti
+        script: |
+          cd ios/App && pod install
+      - name: Potpisivanje (automatsko, preko Apple naloga)
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Build .ipa
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        # Šalje build u TestFlight; na "produkciju" se pušta ručno iz
+        # App Store Connect-a kad prođe review.
+        submit_to_testflight: true
+
+  android:
+    name: Android — Play Store
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      vars:
+        PACKAGE_NAME: "online.acebarberstudio.app"
+      android_signing:
+        - ace_barber_keystore
+      node: 22.15.1
+      java: 21
+    scripts:
+      - name: Instalacija paketa
+        script: npm ci
+      - name: Build sajta i sinhronizacija
+        script: |
+          npm run build
+          npx cap sync android
+      - name: Build .aab
+        script: |
+          cd android && ./gradlew bundleRelease
+    artifacts:
+      - android/app/build/outputs/bundle/**/*.aab

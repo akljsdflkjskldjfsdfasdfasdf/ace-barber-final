@@ -1,6 +1,6 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { AnimatePresence } from "framer-motion";
-import { pb } from "./lib/pocketbase";
+import { pb, isNativeApp } from "./lib/pocketbase";
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import Services from "./components/Services";
@@ -42,6 +42,31 @@ function PublicSite() {
       </Suspense>
       <Footer />
     </div>
+  );
+}
+
+// U aplikaciji nema adresne linije (pa ni tajne rute /petarnikola) ni
+// tastature (pa ni Ctrl+Shift+Z). Zato se admin prijava tamo otvara sa
+// 5 brzih dodira u donjem levom uglu — nevidljivo polje 44×44, taman
+// koliko treba prstu, a gost na njega neće naleteti slučajno.
+function AdminTapZone({ onUnlock }: { onUnlock: () => void }) {
+  const taps = useRef<number[]>([]);
+  const handleTap = () => {
+    const now = Date.now();
+    // Broje se samo dodiri u poslednje 3 sekunde — inače bi se slučajni
+    // dodiri tokom celog dana sabrali i sami otvorili prijavu.
+    taps.current = [...taps.current.filter((t) => now - t < 3000), now];
+    if (taps.current.length >= 5) {
+      taps.current = [];
+      onUnlock();
+    }
+  };
+  return (
+    <div
+      onClick={handleTap}
+      aria-hidden="true"
+      className="fixed bottom-0 left-0 z-[200] h-11 w-11"
+    />
   );
 }
 
@@ -127,6 +152,7 @@ function App() {
   return (
     <>
       {booted && <PublicSite />}
+      {isNativeApp && <AdminTapZone onUnlock={() => setShowAdminLogin(true)} />}
       <AnimatePresence>
         {!booted && <Preloader onFinish={() => setBooted(true)} />}
       </AnimatePresence>

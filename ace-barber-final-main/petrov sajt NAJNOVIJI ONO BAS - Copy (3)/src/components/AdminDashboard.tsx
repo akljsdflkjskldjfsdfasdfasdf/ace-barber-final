@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { pb, Appointment } from "../lib/pocketbase";
+import { pb, Appointment, isNativeApp } from "../lib/pocketbase";
+import { onAppResume } from "../lib/native";
 import { BARBERS, barberName } from "../lib/barbers";
 import {
   LogOut,
@@ -78,7 +79,11 @@ const WEEKDAYS = [
 ];
 
 // Cena jednog šišanja — od nje se računa i ostvarena zarada i prognoza.
-const PRICE_PER_CUT = 1300;
+// U nativnoj aplikaciji nema realtime-a (vidi ispod), pa se server
+// anketira na ovoliko milisekundi.
+const NATIVE_POLL_MS = 30000;
+
+const PRICE_PER_CUT = 1500;
 
 // Koliko nedelja unazad se gleda da bi se izračunao prosek mušterija po danu.
 const HISTORY_WEEKS = 12;
@@ -1877,6 +1882,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const init = async () => {
       setCheckingAdmin(true);
@@ -1913,23 +1919,39 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       }
       await fetchAppointments();
 
-      try {
-        // ── Realtime koristi silentFetch – ne resetuje selectedDate ──
-        // Kroz scheduleSilentFetch, da nalet događaja ne obori server.
-        unsubscribe = await pb.collection("appointments").subscribe("*", () => {
-          scheduleSilentFetch();
-        });
-      } catch (err) {
-        console.error("Realtime subscription failed:", err);
+      // ── Osvežavanje: realtime na webu, anketiranje u aplikaciji ──
+      // Realtime ide preko EventSource (SSE), a njega CapacitorHttp NE
+      // presreće — ostaje na WebView origin-u "https://localhost", koji
+      // PocketBase nema u listi dozvoljenih, pa veza padne na CORS-u.
+      // Zato u aplikaciji obično anketiranje; podaci kasne najviše 30s.
+      if (isNativeApp) {
+        pollTimer = setInterval(() => {
+          silentFetch();
+        }, NATIVE_POLL_MS);
+      } else {
+        try {
+          // ── Realtime koristi silentFetch – ne resetuje selectedDate ──
+          // Kroz scheduleSilentFetch, da nalet događaja ne obori server.
+          unsubscribe = await pb.collection("appointments").subscribe("*", () => {
+            scheduleSilentFetch();
+          });
+        } catch (err) {
+          console.error("Realtime subscription failed:", err);
+        }
       }
     };
 
     init();
     return () => {
       if (unsubscribe) unsubscribe();
+      if (pollTimer) clearInterval(pollTimer);
       if (refetchTimer.current) clearTimeout(refetchTimer.current);
     };
-  }, [fetchAppointments, scheduleSilentFetch]);
+  }, [fetchAppointments, scheduleSilentFetch, silentFetch]);
+
+  // Povratak iz pozadine u aplikaciji = odmah povuci sveže termine,
+  // da šef ne gleda stanje od pre pola sata dok ne istekne anketiranje.
+  useEffect(() => onAppResume(() => silentFetch()), [silentFetch]);
 
   const handleManualRefresh = async () => {
     setRefreshing(true);

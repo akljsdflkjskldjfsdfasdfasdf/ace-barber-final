@@ -231,3 +231,40 @@ html.lenis body {
     );
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   NATIVNA APLIKACIJA (Android / iOS)
+   Klasu "native-app" postavlja initNative() — na sajtu je nema,
+   pa ova pravila tamo ništa ne menjaju.
+   ═══════════════════════════════════════════════════════════ */
+
+/* Razmak za statusnu traku gore i "home" crtu dole (iPhone bez dugmeta). */
+.native-app body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Kursor koji prati miš nema smisla na dodirnom ekranu. */
+.native-app .custom-cursor,
+.native-app [data-custom-cursor] {
+  display: none !important;
+}
+
+/* Bez plavog bljeska i bez "povuci da osvežiš" preko cele aplikacije. */
+.native-app {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Tekst se ne selektuje slučajno pri dužem dodiru — osim u poljima za unos. */
+.native-app body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.native-app input,
+.native-app textarea,
+.native-app select,
+.native-app [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}

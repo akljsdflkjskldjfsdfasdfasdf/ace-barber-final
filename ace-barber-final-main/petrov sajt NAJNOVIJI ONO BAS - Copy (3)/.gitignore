@@ -16,3 +16,8 @@ pb_mail/accounts.json
 # misc
 .DS_Store
 *.log
+
+# Ključ za potpisivanje Android aplikacije — NIKAD na GitHub
+*.keystore
+*.jks
+keystore.properties

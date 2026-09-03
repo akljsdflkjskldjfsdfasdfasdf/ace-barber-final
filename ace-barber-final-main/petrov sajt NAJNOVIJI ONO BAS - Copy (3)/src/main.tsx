@@ -12,9 +12,13 @@ import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 
 import App from "./App.tsx";
+import { initNative } from "./lib/native.ts";
 import SmoothScroll from "./components/SmoothScroll.tsx";
 import { Toaster } from "./components/ui/sonner.tsx";
 import "./index.css";
+
+// Nativna podešavanja (statusna traka, splash, dugme nazad) — na sajtu ne radi ništa.
+initNative();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
