@@ -9,7 +9,7 @@ const services = [
     title: "Haircut",
     description:
       "Timeless styles, crafted with precision and attention to detail",
-    price: "1300 din",
+    price: "1500 din",
   },
   {
     icon: Droplets,
