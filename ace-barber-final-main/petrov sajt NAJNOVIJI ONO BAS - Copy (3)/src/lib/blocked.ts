@@ -11,7 +11,15 @@ export interface BlockedClient {
   phone_norm: string;
   email: string;
   reason: string;
+  // Oznake uređaja sa kojih je pokušavao da zakaže, razdvojene novim redom.
+  // Server ih sam dopisuje kad odbije pokušaj — admin ih ne upisuje ručno.
+  device_ids: string;
   created: string;
+}
+
+// Koliko je uređaja zapamćeno na ovom zapisu.
+export function deviceCount(item: BlockedClient): number {
+  return String(item.device_ids || "").split("\n").filter(Boolean).length;
 }
 
 // Svodi broj telefona na jedan oblik, da "+381 64 243-7639",

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import Reveal from "./Reveal";
 import { BARBERS, Barber } from "../lib/barbers";
+import { getDeviceId } from "../lib/device";
 
 const allTimeSlots = [
   "11:00",
@@ -203,6 +204,11 @@ export default function BookingBeta() {
         user_email: email.trim(),
         barber: selectedBarber.id,
         barber_name: selectedBarber.name,
+        // Nije polje kolekcije — PocketBase ga ignoriše pri upisu, a čita
+        // ga samo hook za crnu listu (pb_hooks/blocked.pb.js). Zato se
+        // oznaka uređaja nikad ne upisuje u termin. Prazna ako
+        // localStorage nije dostupan.
+        device_id: getDeviceId(),
       });
       toast.success("Termin uspešno zakazan!", {
         description: `${selectedBarber.name} · ${selectedTime} · ${new Date(

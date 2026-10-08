@@ -7,6 +7,7 @@ import {
   normPhone,
   normEmail,
   cleanName,
+  deviceCount,
 } from "../lib/blocked";
 import {
   LogOut,
@@ -16,6 +17,7 @@ import {
   Ban,
   UserPlus,
   UserX,
+  Smartphone,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -1993,8 +1995,10 @@ function BlacklistTab() {
         <p className="text-sm text-neutral-400 leading-relaxed">
           Klijent sa ove liste ne može sam da zakaže termin — ni sa sajta, ni iz
           aplikacije. Prepoznaje se po <strong className="text-white">broju telefona</strong> ili{" "}
-          <strong className="text-white">email adresi</strong>. Postojeći termini mu ostaju, a
-          ti i dalje možeš ručno da mu upišeš termin preko taba „Blokiranje".
+          <strong className="text-white">email adresi</strong>. Kad ga server odbije, zapamti mu i{" "}
+          <strong className="text-white">uređaj</strong>, pa ne prođe ni ako se vrati sa novim
+          brojem — dok ne obriše podatke sajta ili ne reinstalira aplikaciju. Postojeći termini
+          mu ostaju, a ti i dalje možeš ručno da mu upišeš termin preko taba „Blokiranje".
         </p>
       </div>
 
@@ -2117,6 +2121,18 @@ function BlacklistTab() {
                   </p>
                   {item.reason && (
                     <p className="text-xs text-neutral-600 mt-1.5 italic">{item.reason}</p>
+                  )}
+                  {/* Uređaje server sam pamti kad odbije pokušaj zakazivanja */}
+                  {deviceCount(item) > 0 && (
+                    <p className="text-xs text-red-400/80 mt-1.5 flex items-center gap-1.5">
+                      <Smartphone className="w-3 h-3" />
+                      {deviceCount(item) === 1
+                        ? "zapamćen 1 uređaj"
+                        : `zapamćena ${deviceCount(item)} uređaja`}
+                      <span className="text-neutral-600">
+                        — ne prođe ni sa drugim brojem
+                      </span>
+                    </p>
                   )}
                 </div>
                 <button
