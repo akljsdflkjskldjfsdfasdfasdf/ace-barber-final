@@ -226,10 +226,20 @@ export default function BookingBeta() {
       if (err?.status === 400) {
         toast.error("Ovaj termin je već zauzet!");
       } else if (err?.status === 403) {
-        toast.error("Zakazivanje trenutno nije dozvoljeno.", {
-          description:
-            "U PocketBase otključaj 'Create rule' za kolekciju appointments.",
-        });
+        // Dva različita razloga za 403:
+        //  • crna lista (pb_hooks/blocked.pb.js) — vraća svoju poruku na
+        //    srpskom, koju prikazujemo klijentu kakva je
+        //  • zaključan "Create rule" u PocketBase — PocketBase vraća svoju
+        //    englesku poruku ("You are not allowed to perform this request.")
+        const serverMsg: string = err?.response?.message || "";
+        if (serverMsg && !/not allowed/i.test(serverMsg)) {
+          toast.error(serverMsg);
+        } else {
+          toast.error("Zakazivanje trenutno nije dozvoljeno.", {
+            description:
+              "U PocketBase otključaj 'Create rule' za kolekciju appointments.",
+          });
+        }
       } else if (!err?.status) {
         toast.error("Nema veze sa serverom.", {
           description: "Proveri internet konekciju ili VITE_POCKETBASE_URL.",

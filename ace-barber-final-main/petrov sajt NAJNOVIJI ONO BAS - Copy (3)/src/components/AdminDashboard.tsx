@@ -3,12 +3,19 @@ import { pb, Appointment, isNativeApp } from "../lib/pocketbase";
 import { onAppResume } from "../lib/native";
 import { BARBERS, barberName } from "../lib/barbers";
 import {
+  BlockedClient,
+  normPhone,
+  normEmail,
+  cleanName,
+} from "../lib/blocked";
+import {
   LogOut,
   Calendar,
   Trash2,
   CheckCircle,
   Ban,
   UserPlus,
+  UserX,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -1478,12 +1485,14 @@ function DayViewTab({
   onSelectDate,
   onDelete,
   onStatusChange,
+  onBlockClient,
 }: {
   appointments: Appointment[];
   selectedDate: string;
   onSelectDate: (date: string) => void;
   onDelete: (id: string) => void;
   onStatusChange: (id: string, status: string) => void;
+  onBlockClient: (apt: Appointment) => void;
 }) {
   const today = getTodayISO();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -1758,6 +1767,16 @@ function DayViewTab({
                           )}
                         </button>
                       )}
+                      {/* Crna lista — termin ostaje, klijent više ne može sam da zakaže */}
+                      {!isBlocked && (
+                        <button
+                          onClick={() => onBlockClient(apt)}
+                          title="Blokiraj klijenta za online zakazivanje"
+                          className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-red-700 hover:bg-red-900/30 transition-all"
+                        >
+                          <UserX className="w-4 h-4 text-red-400" />
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteSingle(apt.id)}
                         disabled={isDeleting}
@@ -1804,13 +1823,328 @@ function DayViewTab({
 }
 
 // ═══════════════════════════════════════════════════════════════
+// CRNA LISTA — zajedničke funkcije
+// ═══════════════════════════════════════════════════════════════
+// PAZI na razliku u imenima:
+//   tab "Blokiranje"  → blokira slobodne TERMINE u rasporedu
+//   tab "Crna lista"  → blokira KLIJENTA da sam zakazuje online
+//
+// Crna lista važi za ceo studio, ne po frizeru — klijent sam bira
+// frizera, pa bi blokada kod jednog samo preselila problem kod drugog.
+// Server (pb_hooks/blocked.pb.js) je taj koji odbija rezervaciju;
+// ovde se lista samo održava.
+
+// PocketBase greška — samo polja koja nam trebaju.
+// status 404 na kolekciji = kolekcija ne postoji (migracija nije puštena).
+type PbError = { status?: number; message?: string };
+
+// Da li je ovaj telefon/mejl već na listi. Vraća zapis ili null.
+async function findOnBlacklist(phoneNorm: string, emailNorm: string) {
+  const parts: string[] = [];
+  if (phoneNorm) parts.push(pb.filter("phone_norm = {:p}", { p: phoneNorm }));
+  if (emailNorm) parts.push(pb.filter("email = {:e}", { e: emailNorm }));
+  if (parts.length === 0) return null;
+
+  const found = await pb.collection("blocked_clients").getFullList({
+    filter: parts.join(" || "),
+  });
+  return (found[0] as unknown as BlockedClient) || null;
+}
+
+// Blokiranje direktno iz liste termina. Jedan prompt služi i kao potvrda:
+// Cancel prekida, OK upisuje (razlog sme da ostane prazan).
+// Postojeći termini klijenta se NE diraju — blokada važi za nove.
+async function blockClientFromAppointment(apt: Appointment) {
+  const name = cleanName(apt.first_name, apt.last_name);
+  const phone = apt.phone_number || "";
+  const email = apt.user_email || "";
+  const phoneNorm = normPhone(phone);
+  const emailNorm = normEmail(email);
+
+  if (!phoneNorm && !emailNorm) {
+    alert("Ovaj termin nema ni telefon ni email — klijent se ne može prepoznati.");
+    return;
+  }
+
+  const reason = prompt(
+    `Blokirati ${name} za online zakazivanje?\n\n` +
+      `Telefon: ${phone || "—"}\n` +
+      `Email: ${email || "—"}\n\n` +
+      `Postojeći termini ostaju. Razlog (opciono):`,
+    "",
+  );
+  if (reason === null) return; // Cancel
+
+  try {
+    const existing = await findOnBlacklist(phoneNorm, emailNorm);
+    if (existing) {
+      alert(`${name} je već na crnoj listi.`);
+      return;
+    }
+    await pb.collection("blocked_clients").create({
+      name,
+      phone,
+      phone_norm: phoneNorm,
+      email: emailNorm,
+      reason: reason.trim(),
+    });
+    alert(`${name} je blokiran za online zakazivanje.`);
+  } catch (err) {
+    const e = err as PbError;
+    alert(
+      e?.status === 404
+        ? "Kolekcija 'blocked_clients' ne postoji na serveru — migracija nije puštena."
+        : `Greška pri blokiranju: ${e?.message || err}`,
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CRNA LISTA TAB
+// ═══════════════════════════════════════════════════════════════
+function BlacklistTab() {
+  const [list, setList] = useState<BlockedClient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [reason, setReason] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const records = await pb.collection("blocked_clients").getFullList({
+        sort: "-created",
+      });
+      setList(records as unknown as BlockedClient[]);
+      setError("");
+    } catch (err) {
+      setError(
+        (err as PbError)?.status === 404
+          ? "Kolekcija 'blocked_clients' ne postoji na serveru. Pusti migraciju iz pb_migrations/."
+          : "Greška pri učitavanju crne liste.",
+      );
+      setList([]);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const phoneNorm = normPhone(phone);
+    const emailNorm = normEmail(email);
+
+    // Ime je samo oznaka za tebe — prepoznavanje ide po telefonu/mejlu.
+    if (!phoneNorm && !emailNorm) {
+      alert("Unesi broj telefona ili email — po tome server prepoznaje klijenta.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const existing = await findOnBlacklist(phoneNorm, emailNorm);
+      if (existing) {
+        alert(`Već na listi: ${existing.name || existing.phone || existing.email}`);
+        setSaving(false);
+        return;
+      }
+      await pb.collection("blocked_clients").create({
+        name: name.trim(),
+        phone: phone.trim(),
+        phone_norm: phoneNorm,
+        email: emailNorm,
+        reason: reason.trim(),
+      });
+      setName("");
+      setPhone("");
+      setEmail("");
+      setReason("");
+      await load();
+    } catch (err) {
+      alert(`Greška pri upisu: ${(err as PbError)?.message || err}`);
+    }
+    setSaving(false);
+  };
+
+  const handleRemove = async (item: BlockedClient) => {
+    const label = item.name || item.phone || item.email;
+    if (!confirm(`Ukloniti ${label} sa crne liste?\n\nMoći će ponovo da zakazuje online.`))
+      return;
+    try {
+      await pb.collection("blocked_clients").delete(item.id);
+      setList((prev) => prev.filter((b) => b.id !== item.id));
+    } catch (err) {
+      alert(`Greška pri brisanju: ${(err as PbError)?.message || err}`);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      {/* ── OBJAŠNJENJE ── */}
+      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 flex gap-3">
+        <AlertCircle className="w-5 h-5 text-neutral-500 shrink-0 mt-0.5" />
+        <p className="text-sm text-neutral-400 leading-relaxed">
+          Klijent sa ove liste ne može sam da zakaže termin — ni sa sajta, ni iz
+          aplikacije. Prepoznaje se po <strong className="text-white">broju telefona</strong> ili{" "}
+          <strong className="text-white">email adresi</strong>. Postojeći termini mu ostaju, a
+          ti i dalje možeš ručno da mu upišeš termin preko taba „Blokiranje".
+        </p>
+      </div>
+
+      {/* ── DODAVANJE ── */}
+      <div className="bg-neutral-950 border border-red-900/40 rounded-2xl p-6">
+        <h3 className="font-black uppercase tracking-widest text-sm mb-5 flex items-center gap-2">
+          <UserX className="w-4 h-4 text-red-500" />
+          Blokiraj klijenta
+        </h3>
+        <form onSubmit={handleAdd} className="space-y-4">
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-neutral-500 uppercase block mb-2">
+                Ime i prezime (opciono)
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Dragan Tegeltija"
+                className="w-full bg-black border border-neutral-800 px-4 py-3 rounded-xl text-white focus:outline-none focus:border-neutral-600"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-neutral-500 uppercase block mb-2">
+                Telefon
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+381 64 243 7639"
+                className="w-full bg-black border border-neutral-800 px-4 py-3 rounded-xl text-white focus:outline-none focus:border-neutral-600"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-neutral-500 uppercase block mb-2">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="ime@gmail.com"
+                className="w-full bg-black border border-neutral-800 px-4 py-3 rounded-xl text-white focus:outline-none focus:border-neutral-600"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-neutral-500 uppercase block mb-2">
+                Razlog (opciono)
+              </label>
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Ne dolazi na zakazane termine"
+                className="w-full bg-black border border-neutral-800 px-4 py-3 rounded-xl text-white focus:outline-none focus:border-neutral-600"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-neutral-600">
+            Dovoljan je telefon ILI email. Ako upišeš oba, blokira ga bilo koji od njih.
+          </p>
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full py-4 bg-red-900 hover:bg-red-800 disabled:bg-neutral-800 disabled:text-neutral-600 text-white font-black uppercase rounded-xl transition-all flex items-center justify-center gap-2"
+          >
+            <UserX className="w-4 h-4" />
+            {saving ? "Blokiranje..." : "Blokiraj"}
+          </button>
+        </form>
+      </div>
+
+      {/* ── LISTA ── */}
+      <div>
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-black uppercase tracking-widest text-sm">
+            Blokirani klijenti ({list.length})
+          </h3>
+          <button
+            onClick={load}
+            className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-white transition-all"
+            title="Osveži"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="bg-red-900/30 border border-red-900 text-red-200 px-5 py-4 rounded-2xl text-sm mb-5">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16 text-neutral-500 gap-3">
+            <div className="w-5 h-5 border-2 border-neutral-700 border-t-white rounded-full animate-spin" />
+            Učitavanje...
+          </div>
+        ) : list.length === 0 ? (
+          <div className="text-center py-16">
+            <UserX className="w-14 h-14 mx-auto mb-4 text-neutral-700" />
+            <p className="text-neutral-500">Nema blokiranih klijenata</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {list.map((item) => (
+              <div
+                key={item.id}
+                className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 flex items-start justify-between gap-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-black text-base truncate">
+                    {item.name || "Bez imena"}
+                  </p>
+                  <p className="text-sm text-neutral-500 mt-1 truncate">
+                    {item.phone || "—"}
+                    {item.email && ` · ${item.email}`}
+                  </p>
+                  {item.reason && (
+                    <p className="text-xs text-neutral-600 mt-1.5 italic">{item.reason}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleRemove(item)}
+                  title="Ukloni sa liste"
+                  className="p-2.5 shrink-0 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-green-700 hover:bg-green-900/30 transition-all"
+                >
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN ADMIN DASHBOARD
 // ═══════════════════════════════════════════════════════════════
 export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"days" | "list" | "blocking" | "stats">("days");
+  const [activeTab, setActiveTab] = useState<
+    "days" | "list" | "blocking" | "blacklist" | "stats"
+  >("days");
   const [listFilter, setListFilter] = useState<"all" | "booked" | "completed" | "blocked">("all");
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
@@ -2160,6 +2494,18 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             <Ban className="w-4 h-4" />
             Blokiranje
           </button>
+          {/* Crna lista — blokira KLIJENTA, ne termin (vidi BlacklistTab) */}
+          <button
+            onClick={() => setActiveTab("blacklist")}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
+              activeTab === "blacklist"
+                ? "bg-red-900 text-white border border-red-700"
+                : "bg-neutral-900 text-white border border-neutral-800 hover:border-red-800"
+            }`}
+          >
+            <UserX className="w-4 h-4" />
+            Crna lista
+          </button>
           {/* Statistika — vidi samo šef */}
           {isBoss && (
             <button
@@ -2190,11 +2536,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             onSelectDate={setSelectedDate}
             onDelete={handleDelete}
             onStatusChange={handleStatusChange}
+            onBlockClient={blockClientFromAppointment}
           />
         ) : activeTab === "stats" && isBoss ? (
           <StatsTab />
         ) : activeTab === "blocking" ? (
           <BlockingTab barberId={blockingBarberId} />
+        ) : activeTab === "blacklist" ? (
+          <BlacklistTab />
         ) : (
           <>
             <div className="flex gap-3 mb-6 flex-wrap">
@@ -2283,6 +2632,15 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                             title="Završi"
                           >
                             <CheckCircle className="w-4 h-4 text-green-400" />
+                          </button>
+                        )}
+                        {appointment.status !== "blocked" && (
+                          <button
+                            onClick={() => blockClientFromAppointment(appointment)}
+                            className="p-2.5 bg-neutral-900 hover:bg-red-900/30 border border-neutral-800 hover:border-red-700 rounded-xl transition-all"
+                            title="Blokiraj klijenta za online zakazivanje"
+                          >
+                            <UserX className="w-4 h-4 text-red-400" />
                           </button>
                         )}
                         <button
