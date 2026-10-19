@@ -1312,7 +1312,9 @@ function StatsTab({ barberId }: { barberId: string }) {
       ) : (
         <>
           {/* ── NOVAC ── */}
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          {/* lg (1024px), ne xl: laptop od 1280px sa scrollbar-om ima viewport
+              ~1265 i nikad ne bi dobio četiri kolone. */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <Card
               label="Ostvareno"
               value={fmtMoney(realizedMoney)}
@@ -1445,8 +1447,10 @@ function StatsTab({ barberId }: { barberId: string }) {
                 const pct = (v: number) => (v / maxWeekMoney) * 100;
                 return (
                   <div key={w.from}>
+                    {/* Na telefonu datum ide u drugi red (block), inače bi
+                        oznaka "sad" prelomila red na ružnom mestu. */}
                     <div className="mb-1.5 flex items-baseline justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0">
                         <span
                           className={`text-sm font-bold ${
                             w.isCurrent ? "text-white" : "text-neutral-400"
@@ -1454,14 +1458,14 @@ function StatsTab({ barberId }: { barberId: string }) {
                         >
                           {i + 1}. ned.
                         </span>
-                        <span className="truncate text-[11px] capitalize text-neutral-600">
-                          {formatDateShort(w.from)} – {formatDateShort(w.to)}
-                        </span>
                         {w.isCurrent && (
-                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-black">
+                          <span className="ml-2 rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-black">
                             sad
                           </span>
                         )}
+                        <span className="block truncate text-[11px] capitalize text-neutral-600 sm:ml-2 sm:inline">
+                          {formatDateShort(w.from)} – {formatDateShort(w.to)}
+                        </span>
                       </span>
                       <span className="shrink-0 text-sm font-black tabular-nums">
                         {fmtMoney(total)}
@@ -1503,7 +1507,9 @@ function StatsTab({ barberId }: { barberId: string }) {
                   {formatDateShort(today)} – {formatDateShort(weekTo)}
                 </p>
               </div>
-              <div className="text-right">
+              {/* Pri prelamanju na telefonu blok uzme ceo red — bez
+                  text-left bi iznos ostao centriran i izgledao odlomljeno. */}
+              <div className="w-full text-left sm:w-auto sm:text-right">
                 <p className="text-xl font-black sm:text-2xl">{fmtMoney(weekMoney)}</p>
                 <p className="mt-0.5 text-[11px] text-neutral-500">
                   {weekBooked} zakazanih
@@ -1611,8 +1617,10 @@ function StatsTab({ barberId }: { barberId: string }) {
                   >
                     {idx + 1}
                   </span>
-                  <span className="w-16 shrink-0 truncate text-sm font-bold capitalize sm:w-24">
-                    {d.long}
+                  {/* "Ponedeljak" se na telefonu sekao — tamo ide skraćeno */}
+                  <span className="w-9 shrink-0 text-sm font-bold capitalize sm:w-24">
+                    <span className="sm:hidden">{d.short}</span>
+                    <span className="hidden sm:inline">{d.long}</span>
                   </span>
                   <Bar value={d.avg} max={maxAvg} />
                   <span className="w-12 shrink-0 text-right text-xs font-black tabular-nums sm:w-16 sm:text-sm">
@@ -2608,19 +2616,19 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
 
         {/* ── ŠEF: izbor frizera čiji se raspored gleda ── */}
-        {/* Na telefonu red može da se skroluje vodoravno — tri frizera i
-            "Svi" se ne uklapaju u širinu ekrana. */}
+        {/* Mreža od 4 kolone na telefonu, red na širim ekranima — da sva
+            četiri dugmeta stanu odjednom, bez vodoravnog skrolovanja. */}
         {isBoss && (
           <div className="mb-6">
             <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-neutral-600">
               Gledaš raspored
             </p>
-            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
-              {[{ id: "all", name: "Svi frizeri" }, ...BARBERS].map((b) => (
+            <div className="grid grid-cols-4 gap-2 sm:flex">
+              {[{ id: "all", name: "Svi" }, ...BARBERS].map((b) => (
                 <button
                   key={b.id}
                   onClick={() => setBarberView(b.id)}
-                  className={`shrink-0 whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black uppercase transition-all ${
+                  className={`truncate rounded-xl px-2 py-2 text-xs font-black uppercase transition-all sm:px-4 sm:text-sm ${
                     barberView === b.id
                       ? "bg-white text-black"
                       : "border border-neutral-800 bg-neutral-900 text-white hover:border-neutral-600"
@@ -2655,10 +2663,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
         {/* ── TABOVI ── */}
         {/* Lepljivi na vrhu, da se pri dugoj listi termina ne mora skrolovati
-            nazad do navigacije. Na telefonu se skroluju vodoravno i nose samo
-            ikonu + kratku oznaku. */}
+            nazad do navigacije.
+            Na telefonu: mreža od 5 kolona, ikona iznad kratke oznake — svih
+            pet tabova stane u jedan ekran. Ranije je red bio vodoravno
+            skrolujuć, pa se peti tab uopšte nije video.
+            Od sm naviše: običan red sa punim nazivima. */}
         <div className="sticky top-0 z-30 -mx-4 mb-6 border-b border-neutral-900 bg-black/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-          <div className="flex gap-2 overflow-x-auto pb-0.5">
+          <div className="grid grid-cols-5 gap-1.5 sm:flex sm:gap-2">
             {TABS.map((t) => {
               const Icon = t.icon;
               const active = activeTab === t.id;
@@ -2666,7 +2677,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 <button
                   key={t.id}
                   onClick={() => setActiveTab(t.id)}
-                  className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-black uppercase transition-all sm:px-5 ${
+                  title={t.label}
+                  className={`flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-black uppercase leading-none transition-all sm:flex-row sm:gap-2 sm:px-5 sm:py-2.5 sm:text-sm ${
                     active
                       ? t.danger
                         ? "border border-red-700 bg-red-900 text-white"
