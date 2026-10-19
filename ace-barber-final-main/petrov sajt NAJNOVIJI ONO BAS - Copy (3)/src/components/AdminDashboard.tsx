@@ -537,7 +537,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
   return (
     <div className="space-y-6">
       {/* Za kog frizera važi blokiranje/rezervacija */}
-      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl px-5 py-4 flex items-center gap-3 flex-wrap">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 sm:gap-3 sm:px-5 sm:py-4">
         <span className="text-xs text-neutral-600 uppercase font-black tracking-widest">
           Radiš raspored za:
         </span>
@@ -563,7 +563,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* ODMOR */}
-        <div className="bg-neutral-950 border border-neutral-800 p-6 rounded-2xl">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
           <h3 className="font-black uppercase tracking-widest text-sm mb-1">
             Slobodan dan / Odmor
           </h3>
@@ -629,7 +629,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
         </div>
 
         {/* PO TERMINU */}
-        <div className="bg-neutral-950 border border-neutral-800 p-6 rounded-2xl">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
           <h3 className="font-black uppercase tracking-widest text-sm mb-1">
             Blokiranje po terminu
           </h3>
@@ -698,7 +698,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
       </div>
 
       {/* RUČNA REZERVACIJA NA IME */}
-      <div className="bg-neutral-950 border border-neutral-800 p-6 rounded-2xl">
+      <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
         <h3 className="font-black uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
           <UserPlus className="w-4 h-4" />
           Ručna rezervacija (na ime)
@@ -786,7 +786,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
       </div>
 
       {/* FIKSNI TERMIN — stalna mušterija, isti dan i sat svake nedelje */}
-      <div className="bg-neutral-950 border border-neutral-800 p-6 rounded-2xl">
+      <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
         <h3 className="font-black uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
           <Repeat className="w-4 h-4" />
           Fiksni termin (stalna mušterija)
@@ -1735,7 +1735,7 @@ function DayViewTab({
   const blockedCount = dayAppointments.filter((a) => a.status === "blocked").length;
 
   return (
-    <div className="grid md:grid-cols-[280px_1fr] gap-6 items-start">
+    <div className="grid items-start gap-4 md:grid-cols-[280px_1fr] md:gap-6">
       {/* ── LEVA KOLONA: lista datuma ── */}
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl overflow-hidden">
         <div className="p-4 border-b border-neutral-800">
@@ -1743,7 +1743,7 @@ function DayViewTab({
             Dani sa terminima
           </p>
         </div>
-        <div className="max-h-[600px] overflow-y-auto">
+        <div className="max-h-56 overflow-y-auto md:max-h-[600px]">
           {sortedDates.length === 0 ? (
             <p className="text-neutral-600 text-sm p-4">Nema termina.</p>
           ) : (
@@ -1793,10 +1793,10 @@ function DayViewTab({
 
       {/* ── DESNA KOLONA: termini za dan ── */}
       <div>
-        <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 mb-4">
+        <div className="mb-4 rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-5">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="flex items-center gap-3 mb-1">
+              <div className="mb-1 flex items-center gap-2 sm:gap-3">
                 <button
                   onClick={() => goToDate("prev")}
                   disabled={!prevDate}
@@ -1804,7 +1804,7 @@ function DayViewTab({
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                <h3 className="font-black text-lg capitalize">
+                <h3 className="min-w-0 flex-1 truncate text-base font-black capitalize sm:text-lg">
                   {isToday ? "Danas" : formatDateDisplay(selectedDate)}
                 </h3>
                 <button
@@ -1856,7 +1856,7 @@ function DayViewTab({
         </div>
 
         {dayAppointments.length === 0 ? (
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-12 text-center">
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-8 text-center sm:p-12">
             <Clock className="w-12 h-12 mx-auto mb-3 text-neutral-700" />
             <p className="text-neutral-500">Nema termina za ovaj dan</p>
             {sortedDates.length === 0 && (
@@ -1879,8 +1879,10 @@ function DayViewTab({
                       : "border-neutral-800 hover:border-neutral-700"
                   }`}
                 >
-                  <div className="flex items-center gap-4 p-4">
-                    <div className="w-14 shrink-0 text-center">
+                  {/* flex-wrap + basis-40 na sadržaju: na telefonu dugmad
+                      prelaze u drugi red umesto da stisnu ime na par slova. */}
+                  <div className="flex flex-wrap items-center gap-3 p-3 sm:gap-4 sm:p-4">
+                    <div className="w-12 shrink-0 text-center sm:w-14">
                       <span className="text-xl font-black tabular-nums leading-none block">
                         {apt.appointment_time.split(":")[0]}
                       </span>
@@ -1891,7 +1893,7 @@ function DayViewTab({
 
                     <div className="w-px self-stretch bg-neutral-800 shrink-0" />
 
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0 flex-1 basis-40">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-black text-base truncate">
                           {isBlocked ? "— Blokirano —" : `${apt.first_name} ${apt.last_name}`}
@@ -1913,7 +1915,7 @@ function DayViewTab({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
                       {!isBlocked && apt.status === "booked" && (
                         <button
                           onClick={() => onStatusChange(apt.id, "completed")}
@@ -2169,7 +2171,7 @@ function BlacklistTab() {
       </div>
 
       {/* ── DODAVANJE ── */}
-      <div className="bg-neutral-950 border border-red-900/40 rounded-2xl p-6">
+      <div className="rounded-2xl border border-red-900/40 bg-neutral-950 p-4 sm:p-6">
         <h3 className="font-black uppercase tracking-widest text-sm mb-5 flex items-center gap-2">
           <UserX className="w-4 h-4 text-red-500" />
           Blokiraj klijenta
@@ -2759,12 +2761,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 {filteredAppointments.map((appointment) => (
                   <div
                     key={appointment.id}
-                    className="bg-neutral-950 border border-neutral-800 p-5 rounded-2xl hover:border-neutral-700 transition-colors"
+                    className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 transition-colors hover:border-neutral-700 sm:p-5"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-3 mb-3 flex-wrap">
-                          <h3 className="text-lg font-black">
+                    {/* Na telefonu dugmad idu u svoj red (flex-wrap), da ime i
+                        podaci dobiju punu širinu. */}
+                    <div className="flex flex-wrap items-start justify-between gap-3 sm:gap-4">
+                      <div className="min-w-0 flex-1 basis-48">
+                        <div className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
+                          <h3 className="min-w-0 break-words text-base font-black sm:text-lg">
                             {appointment.first_name} {appointment.last_name}
                           </h3>
                           <span
@@ -2779,7 +2783,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                             {appointment.status}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                        <div className="grid grid-cols-2 gap-3 text-sm sm:gap-4 md:grid-cols-5">
                           <div>
                             <p className="text-[10px] uppercase text-neutral-600 font-black mb-1">Telefon</p>
                             <p className="text-white">{appointment.phone_number}</p>
@@ -2808,7 +2812,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                           </div>
                         </div>
                       </div>
-                      <div className="flex gap-2 shrink-0">
+                      <div className="ml-auto flex shrink-0 gap-2">
                         {appointment.status === "booked" && (
                           <button
                             onClick={() => handleStatusChange(appointment.id, "completed")}
