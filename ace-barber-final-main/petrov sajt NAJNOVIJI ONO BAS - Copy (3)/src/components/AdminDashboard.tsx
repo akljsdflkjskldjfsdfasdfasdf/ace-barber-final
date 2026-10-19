@@ -18,6 +18,7 @@ import {
   UserPlus,
   UserX,
   Smartphone,
+  List,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -87,17 +88,60 @@ const WEEKDAYS = [
   { value: 0, short: "Ned", long: "nedelja" },
 ];
 
-// Cena jednog šišanja — od nje se računa i ostvarena zarada i prognoza.
 // U nativnoj aplikaciji nema realtime-a (vidi ispod), pa se server
 // anketira na ovoliko milisekundi.
 const NATIVE_POLL_MS = 30000;
 
-const PRICE_PER_CUT = 1500;
+// ── CENE (iz Services.tsx) ──
+// Pranje kose je besplatno uz šišanje, pa ne ulazi u račun.
+const PRICE_CUT = 1500;
+const PRICE_BEARD = 700;
+
+// Cena jednog termina. Booking dopisuje usluge na prezime
+// ("Petrović + Beard + Wash"), pa se brada čita odatle — zato zarada
+// nije prosto broj termina × 1500.
+function appointmentPrice(apt: { last_name?: string }): number {
+  const note = String(apt.last_name || "").toLowerCase();
+  return PRICE_CUT + (note.includes("+ beard") ? PRICE_BEARD : 0);
+}
+
+// Koliko termina dan ima u rasporedu. Nedeljom se radi do 16h
+// (isto pravilo kao u BookingBeta), pa je kapacitet manji.
+function slotsForDate(iso: string): number {
+  const isSunday = new Date(iso + "T00:00:00").getDay() === 0;
+  return isSunday
+    ? allTimeSlots.filter((s) => parseInt(s.split(":")[0], 10) < 16).length
+    : allTimeSlots.length;
+}
 
 // Koliko nedelja unazad se gleda da bi se izračunao prosek mušterija po danu.
 const HISTORY_WEEKS = 12;
 
+// ── TABOVI ──
+// Na jednom mestu, da se navigacija ne piše pet puta. `short` je oznaka za
+// telefon, gde za pune nazive nema mesta. `danger` su tabovi koji nekoga
+// blokiraju — stoje poslednji i crveni su, da se ne kliknu slučajno.
+type TabId = "days" | "list" | "stats" | "blocking" | "blacklist";
+
+const TABS: {
+  id: TabId;
+  label: string;
+  short: string;
+  icon: typeof Calendar;
+  danger?: boolean;
+}[] = [
+  { id: "days", label: "Po danima", short: "Dani", icon: Calendar },
+  { id: "list", label: "Lista svih", short: "Lista", icon: List },
+  { id: "stats", label: "Statistika", short: "Zarada", icon: BarChart3 },
+  { id: "blocking", label: "Blokiranje", short: "Termini", icon: Ban, danger: true },
+  { id: "blacklist", label: "Crna lista", short: "Crna", icon: UserX, danger: true },
+];
+
 const fmtMoney = (n: number) => `${Math.round(n).toLocaleString("sr-RS")} RSD`;
+
+// Kraći zapis za uske ekrane: 42.000 RSD → 42k
+const fmtMoneyShort = (n: number) =>
+  n >= 10000 ? `${Math.round(n / 1000)}k` : String(Math.round(n));
 
 // Pomeranje ISO datuma ("2026-08-04") za n dana, bez vremenske zone.
 function shiftISO(iso: string, days: number) {
@@ -901,126 +945,137 @@ function BlockingTab({ barberId }: { barberId: string }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// STATS TAB — mesečna statistika (vidi samo šef)
+// STATS TAB — zarada i prognoza
 // ═══════════════════════════════════════════════════════════════
-function StatsTab() {
+// barberId: "" = ceo studio, inače jedan frizer. Prop stoji u
+// zavisnostima efekta, pa se podaci sami preuzmu kad šef promeni frizera —
+// bez ručnog osvežavanja i bez prikaza tuđih brojeva u međuvremenu.
+//
+// KAKO SE RAČUNA ZARADA (i zašto ovako):
+// Status termina govori različite stvari, pa se novac deli u četiri korpe
+// umesto da se sve sabere u jedan broj:
+//
+//   naplaćeno    status "completed"              → sigurno obavljeno
+//   nepotvrđeno  prošao datum, još "booked"      → frizer nije označio;
+//                                                  možda došao, možda ne
+//   zakazano     budući datum, "booked"          → stoji u knjizi
+//   prognoza     slobodni termini × prosek dana  → procena
+//
+// Staro ponašanje je sve prošle termine računalo kao zarađene, pa je
+// zarada bila naduvana svaki put kad neko ne dođe ili frizer ne klikne
+// "završi". Zato su sada "naplaćeno" i "nepotvrđeno" razdvojeni.
+//
+// Prognoza ne može da pređe broj slobodnih termina tog dana — pre je
+// umela da predvidi više mušterija nego što dan fizički ima mesta.
+function StatsTab({ barberId }: { barberId: string }) {
   const today = getTodayISO();
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
-  const [records, setRecords] = useState<Appointment[]>([]);
+  const [rows, setRows] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  // Istorija (za prosek po danu) + narednih 7 dana (za pregled).
-  // Ne zavisi od izabranog meseca — uvek se gleda od danas.
-  const [baseRecords, setBaseRecords] = useState<Appointment[]>([]);
-  const [baseLoading, setBaseLoading] = useState(true);
+  const barberLabel = barberId ? barberName(barberId) : "ceo studio";
+
+  // "2026-10" — i filter i oznaka meseca
+  const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
+  const monthStart = `${monthKey}-01`;
+  const lastDayNum = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  const monthEnd = `${monthKey}-${String(lastDayNum).padStart(2, "0")}`;
+
   const histFrom = shiftISO(today, -HISTORY_WEEKS * 7);
   const weekTo = shiftISO(today, 6);
 
-  // "2026-07" — koristi se i za filter i kao zavisnost efekta
-  const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
+  // ── JEDAN zahtev za sve ──
+  // Ranije su išla dva (mesec + istorija), svaki sa svojim loading-om, pa je
+  // ekran dvaput poskočio i lakše se udaralo u nginx rate limit (30/min).
+  // Sada se povuče jedan opseg koji pokriva i istoriju i izabrani mesec.
+  const from = histFrom < monthStart ? histFrom : monthStart;
+  const to = weekTo > monthEnd ? weekTo : monthEnd;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const filter = [
+        `appointment_date >= "${from}"`,
+        `appointment_date <= "${to}"`,
+        `(status = "booked" || status = "completed")`,
+        ...(barberId ? [`barber = "${barberId}"`] : []),
+      ].join(" && ");
+
+      const res = await pb.collection("appointments").getFullList({
+        filter,
+        sort: "+appointment_date,+appointment_time",
+        fields:
+          "appointment_date,appointment_time,barber,status,first_name,last_name",
+      });
+      // "BLOKIRANO" su blokirani slotovi i odmor — nisu mušterije.
+      setRows(
+        (res as unknown as Appointment[]).filter(
+          (r) => r.first_name !== "BLOKIRANO",
+        ),
+      );
+    } catch (err) {
+      const e = err as PbError;
+      setRows([]);
+      setError(
+        e?.status === 429
+          ? "Server je privremeno odbio zahtev (previše poziva). Pokušaj za nekoliko sekundi."
+          : "Nije moguće učitati statistiku.",
+      );
+    }
+    setLoading(false);
+  }, [from, to, barberId]);
 
   useEffect(() => {
-    let cancelled = false;
-    const fetchMonth = async () => {
-      setLoading(true);
-      try {
-        const res = await pb.collection("appointments").getFullList({
-          filter: `appointment_date ~ "${monthKey}-" && (status = "booked" || status = "completed")`,
-          fields: "appointment_date,barber,status,first_name",
-        });
-        if (!cancelled) {
-          setRecords(
-            (res as unknown as Appointment[]).filter(
-              (r) => r.first_name !== "BLOKIRANO"
-            )
-          );
-        }
-      } catch {
-        if (!cancelled) setRecords([]);
-      }
-      if (!cancelled) setLoading(false);
-    };
-    fetchMonth();
-    return () => {
-      cancelled = true;
-    };
-  }, [monthKey]);
+    load();
+  }, [load]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchBase = async () => {
-      setBaseLoading(true);
-      try {
-        const res = await pb.collection("appointments").getFullList({
-          filter: `appointment_date >= "${histFrom}" && appointment_date <= "${weekTo}" && (status = "booked" || status = "completed")`,
-          sort: "+appointment_date,+appointment_time",
-          fields:
-            "appointment_date,appointment_time,barber,status,first_name,last_name",
-        });
-        if (!cancelled) {
-          setBaseRecords(
-            (res as unknown as Appointment[]).filter(
-              (r) => r.first_name !== "BLOKIRANO"
-            )
-          );
-        }
-      } catch {
-        if (!cancelled) setBaseRecords([]);
-      }
-      if (!cancelled) setBaseLoading(false);
-    };
-    fetchBase();
-    return () => {
-      cancelled = true;
-    };
-  }, [histFrom, weekTo]);
+  // ── Novac ──
+  const money = (list: Appointment[]) =>
+    list.reduce((s, r) => s + appointmentPrice(r), 0);
 
-  const total = records.length;
-  const bookedN = records.filter((r) => r.status === "booked").length;
-  const completedN = records.filter((r) => r.status === "completed").length;
+  const monthRows = rows.filter(
+    (r) => r.appointment_date >= monthStart && r.appointment_date <= monthEnd,
+  );
 
-  // ── Termini po frizeru (sortirano od najprometnijeg) ──
-  const perBarber = BARBERS.map((b) => ({
-    name: b.name,
-    count: records.filter((r) => r.barber === b.id).length,
-  })).sort((a, b) => b.count - a.count);
-  const maxBarber = Math.max(1, ...perBarber.map((p) => p.count));
+  const paidRows = monthRows.filter((r) => r.status === "completed");
+  const unconfirmedRows = monthRows.filter(
+    (r) => r.status === "booked" && r.appointment_date < today,
+  );
+  const upcomingRows = monthRows.filter(
+    (r) => r.status === "booked" && r.appointment_date >= today,
+  );
 
-  // ── Top 5 najprometnijih datuma ──
-  const byDate: Record<string, number> = {};
-  records.forEach((r) => {
-    byDate[r.appointment_date] = (byDate[r.appointment_date] || 0) + 1;
-  });
-  const topDays = Object.entries(byDate)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-  const maxDay = Math.max(1, ...topDays.map(([, c]) => c));
+  const paidMoney = money(paidRows);
+  const unconfirmedMoney = money(unconfirmedRows);
+  const upcomingMoney = money(upcomingRows);
 
-  // ── Raspodela po danu u nedelji (Pon–Ned) ──
-  const weekdayNames = ["Pon", "Uto", "Sre", "Čet", "Pet", "Sub", "Ned"];
-  const byWeekday = new Array(7).fill(0) as number[];
-  records.forEach((r) => {
-    const d = new Date(r.appointment_date + "T00:00:00").getDay(); // 0 = nedelja
-    byWeekday[(d + 6) % 7]++;
-  });
-  const maxWd = Math.max(1, ...byWeekday);
+  // Ostvareno = sve što je prošlo, potvrđeno ili ne.
+  //
+  // Zašto ne samo "completed": u praksi dva od tri frizera nikad ne kliknu
+  // "završi", pa bi im naplaćeno stajalo na nuli i panel ne bi vredeo ništa.
+  // Zato je glavni broj ostvareno, a potvrđenost je detalj ispod njega —
+  // vidi se i koliko tog novca nije potvrđeno, da broj ima pokriće.
+  const realizedMoney = paidMoney + unconfirmedMoney;
+  const realizedCount = paidRows.length + unconfirmedRows.length;
 
-  // ═══════════════════════════════════════════════════════════
-  // PROGNOZA — prosek mušterija po danu u nedelji iz istorije
-  // ═══════════════════════════════════════════════════════════
-  const history = baseRecords.filter((r) => r.appointment_date < today);
-  const histCountByDate: Record<string, number> = {};
-  history.forEach((r) => {
-    histCountByDate[r.appointment_date] =
-      (histCountByDate[r.appointment_date] || 0) + 1;
+  // ── Prosek iz istorije ──
+  const histRows = rows.filter((r) => r.appointment_date < today);
+  // Prosečan račun — nosi i bradu, pa prognoza ne mora da je pogađa posebno.
+  const avgTicket = histRows.length ? money(histRows) / histRows.length : PRICE_CUT;
+
+  const histByDate: Record<string, number> = {};
+  histRows.forEach((r) => {
+    histByDate[r.appointment_date] = (histByDate[r.appointment_date] || 0) + 1;
   });
 
-  // Ako salon nema termina od početka prozora, prosek se računa tek od prvog
+  // Ako studio nema termina od početka prozora, prosek se računa tek od prvog
   // termina — inače bi prazne nedelje pre otvaranja lažno obarale prosek.
-  const histDates = Object.keys(histCountByDate).sort();
+  const histDates = Object.keys(histByDate).sort();
   const windowStart =
     histDates.length && histDates[0] > histFrom ? histDates[0] : histFrom;
 
@@ -1029,99 +1084,114 @@ function StatsTab() {
   for (let d = windowStart; d < today; d = shiftISO(d, 1)) {
     const i = weekdayIndex(d);
     wdDays[i]++;
-    wdSum[i] += histCountByDate[d] || 0;
+    wdSum[i] += histByDate[d] || 0;
   }
   const wdAvg = wdSum.map((s, i) => (wdDays[i] ? s / wdDays[i] : 0));
-  const hasHistory = history.length > 0;
+  const hasHistory = histRows.length > 0;
 
-  // Očekivan broj mušterija za jedan dan: nikad manje od već zakazanog.
-  const expectedFor = (iso: string, booked: number) =>
-    Math.max(booked, Math.round(wdAvg[weekdayIndex(iso)]));
+  // Kapacitet dana: nedeljom kraće, a za jednog frizera tri puta manji.
+  const capacityFor = (iso: string) =>
+    slotsForDate(iso) * (barberId ? 1 : BARBERS.length);
 
-  // Rang lista dana — od najboljeg do najgoreg
-  const dayRanking = weekdayNames
-    .map((name, i) => ({
-      name,
-      long: WEEKDAYS[i].long,
-      avg: wdAvg[i],
-      sum: wdSum[i],
-      days: wdDays[i],
-    }))
-    .sort((a, b) => b.avg - a.avg);
-  const maxAvg = Math.max(0.001, ...dayRanking.map((d) => d.avg));
-
-  // ═══════════════════════════════════════════════════════════
-  // ZARADA PO NEDELJAMA MESECA (pon–ned, isečeno na mesec)
-  // ═══════════════════════════════════════════════════════════
-  const monthStart = `${monthKey}-01`;
-  const lastDayNum = new Date(
-    month.getFullYear(),
-    month.getMonth() + 1,
-    0
-  ).getDate();
-  const monthEnd = `${monthKey}-${String(lastDayNum).padStart(2, "0")}`;
+  // Koliko se JOŠ mušterija očekuje tog dana, preko već zakazanih.
+  // Ograničeno brojem slobodnih termina — dan ne može da primi više.
+  const extraFor = (iso: string, booked: number) => {
+    const avg = Math.round(wdAvg[weekdayIndex(iso)]);
+    const free = Math.max(0, capacityFor(iso) - booked);
+    return Math.min(Math.max(0, avg - booked), free);
+  };
 
   const monthCountByDate: Record<string, number> = {};
-  records.forEach((r) => {
+  monthRows.forEach((r) => {
     monthCountByDate[r.appointment_date] =
       (monthCountByDate[r.appointment_date] || 0) + 1;
   });
 
+  // ── Nedelje meseca (pon–ned, isečeno na mesec) ──
   const weeks: {
     from: string;
     to: string;
-    done: number;
+    paid: number;
+    unconfirmed: number;
+    upcoming: number;
     forecast: number;
     isCurrent: boolean;
   }[] = [];
+
   let cursor = monthStart;
   while (cursor <= monthEnd) {
-    // Nedelja se završava u nedelju uveče, ili ranije ako mesec pre toga istekne.
     let weekEnd = shiftISO(cursor, 6 - weekdayIndex(cursor));
     if (weekEnd > monthEnd) weekEnd = monthEnd;
-    let done = 0;
+
+    const inWeek = (r: Appointment) =>
+      r.appointment_date >= cursor && r.appointment_date <= weekEnd;
+
     let forecast = 0;
     for (let d = cursor; d <= weekEnd; d = shiftISO(d, 1)) {
-      const booked = monthCountByDate[d] || 0;
-      if (d < today) done += booked;
-      else forecast += expectedFor(d, booked);
+      if (d < today) continue;
+      forecast += extraFor(d, monthCountByDate[d] || 0) * avgTicket;
     }
+
     weeks.push({
       from: cursor,
       to: weekEnd,
-      done,
+      paid: money(paidRows.filter(inWeek)),
+      unconfirmed: money(unconfirmedRows.filter(inWeek)),
+      upcoming: money(upcomingRows.filter(inWeek)),
       forecast,
       isCurrent: cursor <= today && today <= weekEnd,
     });
     cursor = shiftISO(weekEnd, 1);
   }
 
-  const doneCuts = weeks.reduce((s, w) => s + w.done, 0);
-  const forecastCuts = weeks.reduce((s, w) => s + w.forecast, 0);
-  const earned = doneCuts * PRICE_PER_CUT;
-  const forecastMoney = forecastCuts * PRICE_PER_CUT;
+  const forecastMoney = weeks.reduce((s, w) => s + w.forecast, 0);
+  const forecastCuts = avgTicket > 0 ? Math.round(forecastMoney / avgTicket) : 0;
+  const projected = paidMoney + unconfirmedMoney + upcomingMoney + forecastMoney;
   const maxWeekMoney = Math.max(
     1,
-    ...weeks.map((w) => (w.done + w.forecast) * PRICE_PER_CUT)
+    ...weeks.map((w) => w.paid + w.unconfirmed + w.upcoming + w.forecast),
   );
 
-  // ═══════════════════════════════════════════════════════════
-  // NAREDNIH 7 DANA — pregled termina od danas
-  // ═══════════════════════════════════════════════════════════
-  const dayCapacity = allTimeSlots.length * BARBERS.length;
+  // ── Ko koliko zarađuje (samo kad se gleda ceo studio) ──
+  const perBarber = BARBERS.map((b) => {
+    const list = monthRows.filter((r) => r.barber === b.id);
+    return {
+      id: b.id,
+      name: b.name,
+      count: list.length,
+      paid: money(list.filter((r) => r.status === "completed")),
+      total: money(list),
+    };
+  }).sort((a, b) => b.total - a.total);
+  const maxBarberMoney = Math.max(1, ...perBarber.map((p) => p.total));
+  const studioTotal = perBarber.reduce((s, p) => s + p.total, 0);
+
+  // ── Rang dana u nedelji ──
+  const dayRanking = WEEKDAYS.map((w, i) => ({
+    short: w.short,
+    long: w.long,
+    avg: wdAvg[i],
+    days: wdDays[i],
+  })).sort((a, b) => b.avg - a.avg);
+  const maxAvg = Math.max(0.001, ...dayRanking.map((d) => d.avg));
+
+  // ── Narednih 7 dana ──
   const nextWeek = Array.from({ length: 7 }, (_, i) => shiftISO(today, i)).map(
     (iso) => {
-      const items = baseRecords.filter((r) => r.appointment_date === iso);
+      const items = rows.filter((r) => r.appointment_date === iso);
       return {
         iso,
         items,
         booked: items.length,
-        expected: expectedFor(iso, items.length),
+        capacity: capacityFor(iso),
+        extra: extraFor(iso, items.length),
+        money: money(items),
       };
-    }
+    },
   );
   const weekBooked = nextWeek.reduce((s, d) => s + d.booked, 0);
-  const weekExpected = nextWeek.reduce((s, d) => s + d.expected, 0);
+  const weekMoney = nextWeek.reduce((s, d) => s + d.money, 0);
+  const weekExtraMoney = nextWeek.reduce((s, d) => s + d.extra * avgTicket, 0);
 
   const monthLabel = month.toLocaleDateString("sr-RS", {
     month: "long",
@@ -1129,212 +1199,322 @@ function StatsTab() {
   });
   const changeMonth = (dir: number) =>
     setMonth(new Date(month.getFullYear(), month.getMonth() + dir, 1));
+  const isThisMonth = monthKey === today.slice(0, 7);
 
-  const Bar = ({ value, max }: { value: number; max: number }) => (
-    <div className="h-3 flex-1 overflow-hidden rounded-full bg-neutral-800">
+  const Bar = ({
+    value,
+    max,
+    color = "bg-white",
+  }: {
+    value: number;
+    max: number;
+    color?: string;
+  }) => (
+    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-neutral-800">
       <div
-        className="h-full rounded-full bg-white transition-all duration-500"
-        style={{ width: `${(value / max) * 100}%` }}
+        className={`h-full rounded-full ${color} transition-all duration-500`}
+        style={{ width: `${Math.min(100, (value / max) * 100)}%` }}
       />
     </div>
   );
 
+  const Card = ({
+    label,
+    value,
+    sub,
+    icon,
+    tone = "",
+    strong = false,
+  }: {
+    label: string;
+    value: string;
+    sub: string;
+    icon?: React.ReactNode;
+    tone?: string;
+    strong?: boolean;
+  }) => (
+    <div
+      className={`rounded-2xl border bg-neutral-950 p-4 sm:p-5 ${
+        strong ? "border-white/25" : "border-neutral-800"
+      }`}
+    >
+      <p className="mb-2 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-neutral-500">
+        {icon}
+        {label}
+      </p>
+      <p className={`text-xl font-black leading-tight sm:text-2xl ${tone}`}>{value}</p>
+      <p className="mt-1 text-[11px] leading-snug text-neutral-500">{sub}</p>
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
-      {/* ── Izbor meseca + ukupno ── */}
-      <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5 flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
+    <div className="space-y-5">
+      {/* ── Mesec + za koga ── */}
+      <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3">
           <button
             onClick={() => changeMonth(-1)}
-            className="p-1.5 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-white transition-all"
+            aria-label="Prethodni mesec"
+            className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 transition-all hover:border-white"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="h-4 w-4" />
           </button>
-          <h3 className="font-black text-lg capitalize min-w-[160px] text-center">
-            {monthLabel}
-          </h3>
+
+          <div className="min-w-0 text-center">
+            <h3 className="truncate text-base font-black capitalize sm:text-lg">
+              {monthLabel}
+            </h3>
+            <p className="truncate text-[11px] text-neutral-500">
+              {barberLabel}
+              {!isThisMonth && " · prošli/budući mesec"}
+            </p>
+          </div>
+
           <button
             onClick={() => changeMonth(1)}
-            className="p-1.5 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-white transition-all"
+            aria-label="Sledeći mesec"
+            className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 transition-all hover:border-white"
           >
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex gap-4 flex-wrap text-sm">
-          <span className="font-black text-2xl">{total} <span className="text-sm font-bold text-neutral-500">termina</span></span>
-          <span className="text-green-400 font-bold self-center">● {bookedN} zakazanih</span>
-          <span className="text-neutral-400 font-bold self-center">● {completedN} završenih</span>
-        </div>
+
+        {!isThisMonth && (
+          <button
+            onClick={() =>
+              setMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+            }
+            className="mt-3 w-full rounded-xl border border-neutral-800 bg-neutral-900 py-2 text-xs font-black uppercase tracking-wider transition-all hover:border-white"
+          >
+            Vrati na ovaj mesec
+          </button>
+        )}
       </div>
 
-      {loading || baseLoading ? (
-        <div className="flex items-center justify-center py-16 text-neutral-500 gap-3">
-          <div className="w-5 h-5 border-2 border-neutral-700 border-t-white rounded-full animate-spin" />
+      {error && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-900 bg-red-900/30 px-5 py-4 text-sm text-red-200">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1">{error}</span>
+          <button
+            onClick={load}
+            className="rounded-lg border border-red-700 bg-red-900/60 px-3 py-1.5 text-xs font-black uppercase tracking-wider transition-all hover:bg-red-900"
+          >
+            Pokušaj ponovo
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center gap-3 py-16 text-neutral-500">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-700 border-t-white" />
           Učitavanje statistike...
         </div>
       ) : (
         <>
-          {/* ── ZARADA: ostvareno / prognoza / ukupno ── */}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5">
-              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2 flex items-center gap-2">
-                <Banknote className="w-3.5 h-3.5" />
-                Zarađeno do sada
-              </p>
-              <p className="text-3xl font-black text-green-400">{fmtMoney(earned)}</p>
-              <p className="text-xs text-neutral-500 mt-1">
-                {doneCuts} šišanja · {fmtMoney(PRICE_PER_CUT)} po šišanju
-              </p>
-            </div>
-            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5">
-              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2 flex items-center gap-2">
-                <TrendingUp className="w-3.5 h-3.5" />
-                Prognoza do kraja meseca
-              </p>
-              <p className="text-3xl font-black text-blue-400">{fmtMoney(forecastMoney)}</p>
-              <p className="text-xs text-neutral-500 mt-1">
-                još ~{forecastCuts} šišanja
-              </p>
-            </div>
-            <div className="bg-neutral-950 border border-white/20 rounded-2xl p-5">
-              <p className="text-[10px] uppercase font-black tracking-widest text-neutral-600 mb-2">
-                Ukupno projektovano
-              </p>
-              <p className="text-3xl font-black">{fmtMoney(earned + forecastMoney)}</p>
-              <p className="text-xs text-neutral-500 mt-1">
-                {doneCuts + forecastCuts} šišanja za ceo mesec
-              </p>
-            </div>
+          {/* ── NOVAC ── */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+            <Card
+              label="Ostvareno"
+              value={fmtMoney(realizedMoney)}
+              sub={
+                unconfirmedMoney > 0
+                  ? `${realizedCount} prošlih · potvrđeno ${fmtMoney(paidMoney)}`
+                  : `${realizedCount} prošlih · sve potvrđeno`
+              }
+              icon={<Banknote className="h-3.5 w-3.5" />}
+              tone="text-green-400"
+            />
+            <Card
+              label="Zakazano"
+              value={fmtMoney(upcomingMoney)}
+              sub={`${upcomingRows.length} termina u knjizi`}
+              icon={<CalendarDays className="h-3.5 w-3.5" />}
+              tone="text-blue-400"
+            />
+            <Card
+              label="Prognoza"
+              value={fmtMoney(forecastMoney)}
+              sub={
+                hasHistory
+                  ? `~${forecastCuts} mušterija na slobodne termine`
+                  : "nema istorije za procenu"
+              }
+              icon={<TrendingUp className="h-3.5 w-3.5" />}
+              tone="text-neutral-300"
+            />
+            <Card
+              label="Projekcija meseca"
+              value={fmtMoney(projected)}
+              sub="ostvareno + zakazano + prognoza"
+              strong
+            />
           </div>
 
-          {!hasHistory && (
-            <div className="bg-yellow-900/20 border border-yellow-900/60 text-yellow-300 rounded-2xl p-4 text-sm flex items-start gap-3">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          {unconfirmedRows.length > 0 && (
+            <div className="flex items-start gap-3 rounded-2xl border border-yellow-900/60 bg-yellow-900/20 p-4 text-sm text-yellow-300">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                Još nema dovoljno istorije za prognozu — prikazuje se samo ono što je
-                već zakazano. Prosek se računa iz poslednjih {HISTORY_WEEKS} nedelja.
+                <strong>{unconfirmedRows.length}</strong> prošlih termina (
+                {fmtMoney(unconfirmedMoney)}) nije označeno kao završeno. Novac
+                je uračunat u ostvareno, ali se ne može potvrditi da je mušterija
+                došla. Klikni zeleno ✓ na terminu da postane potvrđen.
               </span>
             </div>
           )}
 
-          {/* ── ZARADA PO NEDELJAMA MESECA ── */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-            <h3 className="font-black uppercase tracking-widest text-sm mb-1">
+          {!hasHistory && (
+            <div className="flex items-start gap-3 rounded-2xl border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Nema istorije za prognozu — prikazuje se samo ono što je već
+                zakazano. Prosek se računa iz poslednjih {HISTORY_WEEKS} nedelja.
+              </span>
+            </div>
+          )}
+
+          {/* ── KO KOLIKO ZARAĐUJE (samo za ceo studio) ── */}
+          {!barberId && (
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
+              <h3 className="text-sm font-black uppercase tracking-widest">
+                Ko koliko zarađuje
+              </h3>
+              <p className="mb-5 mt-1 text-xs text-neutral-600">
+                {monthLabel} · ostvareno + zakazano, bez prognoze
+              </p>
+              <div className="space-y-4">
+                {perBarber.map((p, idx) => {
+                  const share = studioTotal
+                    ? Math.round((p.total / studioTotal) * 100)
+                    : 0;
+                  return (
+                    <div key={p.id}>
+                      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={`text-xs font-black ${
+                              idx === 0 ? "text-green-400" : "text-neutral-600"
+                            }`}
+                          >
+                            {idx + 1}.
+                          </span>
+                          <span className="truncate text-sm font-bold">{p.name}</span>
+                          <span className="shrink-0 text-[11px] text-neutral-600">
+                            {p.count} muš. · {share}%
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-sm font-black tabular-nums">
+                          {fmtMoney(p.total)}
+                        </span>
+                      </div>
+                      <Bar value={p.total} max={maxBarberMoney} color="bg-green-500" />
+                      <p className="mt-1 text-[11px] text-neutral-600">
+                        potvrđeno {fmtMoney(p.paid)}
+                        {p.total > p.paid &&
+                          ` · nepotvrđeno ${fmtMoney(p.total - p.paid)}`}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── ZARADA PO NEDELJAMA ── */}
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
+            <h3 className="text-sm font-black uppercase tracking-widest">
               Zarada po nedeljama
             </h3>
-            <p className="text-xs text-neutral-600 mb-5">
-              Zeleno = već zarađeno · plavo = prognoza na osnovu proseka i zakazanih termina
-            </p>
+            <div className="mb-5 mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-500">
+              <span className="flex items-center gap-1.5">
+                <i className="inline-block h-2 w-2 rounded-full bg-green-500" /> naplaćeno
+              </span>
+              <span className="flex items-center gap-1.5">
+                <i className="inline-block h-2 w-2 rounded-full bg-yellow-500" /> nepotvrđeno
+              </span>
+              <span className="flex items-center gap-1.5">
+                <i className="inline-block h-2 w-2 rounded-full bg-blue-500" /> zakazano
+              </span>
+              <span className="flex items-center gap-1.5">
+                <i className="inline-block h-2 w-2 rounded-full bg-neutral-600" /> prognoza
+              </span>
+            </div>
+
             <div className="space-y-4">
               {weeks.map((w, i) => {
-                const money = (w.done + w.forecast) * PRICE_PER_CUT;
-                const donePct = (w.done * PRICE_PER_CUT / maxWeekMoney) * 100;
-                const forecastPct = (w.forecast * PRICE_PER_CUT / maxWeekMoney) * 100;
+                const total = w.paid + w.unconfirmed + w.upcoming + w.forecast;
+                const pct = (v: number) => (v / maxWeekMoney) * 100;
                 return (
                   <div key={w.from}>
-                    <div className="flex items-center justify-between gap-3 mb-1.5 flex-wrap">
-                      <span className="text-sm font-bold flex items-center gap-2">
-                        <span className={w.isCurrent ? "text-white" : "text-neutral-400"}>
-                          {i + 1}. nedelja
+                    <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={`text-sm font-bold ${
+                            w.isCurrent ? "text-white" : "text-neutral-400"
+                          }`}
+                        >
+                          {i + 1}. ned.
                         </span>
-                        <span className="text-xs text-neutral-600 font-normal capitalize">
+                        <span className="truncate text-[11px] capitalize text-neutral-600">
                           {formatDateShort(w.from)} – {formatDateShort(w.to)}
                         </span>
                         {w.isCurrent && (
-                          <span className="px-2 py-0.5 text-[9px] font-black uppercase rounded-full bg-white text-black">
-                            tekuća
+                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-black">
+                            sad
                           </span>
                         )}
                       </span>
-                      <span className="text-sm font-black tabular-nums">
-                        {fmtMoney(money)}
-                        <span className="text-xs font-bold text-neutral-600 ml-2">
-                          {w.done + w.forecast} šiš.
-                        </span>
+                      <span className="shrink-0 text-sm font-black tabular-nums">
+                        {fmtMoney(total)}
                       </span>
                     </div>
-                    <div className="h-3 w-full overflow-hidden rounded-full bg-neutral-800 flex">
+                    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-neutral-800">
                       <div
                         className="h-full bg-green-500 transition-all duration-500"
-                        style={{ width: `${donePct}%` }}
+                        style={{ width: `${pct(w.paid)}%` }}
                       />
                       <div
-                        className="h-full bg-blue-500/70 transition-all duration-500"
-                        style={{ width: `${forecastPct}%` }}
+                        className="h-full bg-yellow-500 transition-all duration-500"
+                        style={{ width: `${pct(w.unconfirmed)}%` }}
+                      />
+                      <div
+                        className="h-full bg-blue-500 transition-all duration-500"
+                        style={{ width: `${pct(w.upcoming)}%` }}
+                      />
+                      <div
+                        className="h-full bg-neutral-600 transition-all duration-500"
+                        style={{ width: `${pct(w.forecast)}%` }}
                       />
                     </div>
-                    <p className="text-[11px] text-neutral-600 mt-1">
-                      zarađeno {fmtMoney(w.done * PRICE_PER_CUT)}
-                      {w.forecast > 0 && ` · prognoza +${fmtMoney(w.forecast * PRICE_PER_CUT)}`}
-                    </p>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* ── PROGNOZA: dani od najboljeg do najgoreg ── */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-            <h3 className="font-black uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Prognoza dana — od najboljeg do najgoreg
-            </h3>
-            <p className="text-xs text-neutral-600 mb-5">
-              Prosek mušterija po danu iz poslednjih {HISTORY_WEEKS} nedelja i očekivana zarada
-            </p>
-            <div className="space-y-3">
-              {dayRanking.map((d, idx) => (
-                <div key={d.name} className="flex items-center gap-3">
-                  <span
-                    className={`w-6 text-center font-black ${
-                      idx === 0 ? "text-green-400" : "text-neutral-600"
-                    }`}
-                  >
-                    {idx + 1}.
-                  </span>
-                  <span className="w-24 text-sm font-bold capitalize truncate">{d.long}</span>
-                  <Bar value={d.avg} max={maxAvg} />
-                  <span className="w-16 text-right text-sm font-black tabular-nums">
-                    ~{d.avg.toFixed(1)}
-                    <span className="text-[10px] text-neutral-600 font-bold"> muš.</span>
-                  </span>
-                  <span className="w-28 text-right text-sm font-black tabular-nums text-green-400">
-                    {fmtMoney(d.avg * PRICE_PER_CUT)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* ── NAREDNIH 7 DANA ── */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-            <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
+            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-black uppercase tracking-widest text-sm flex items-center gap-2">
-                  <CalendarDays className="w-4 h-4" />
+                <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-widest">
+                  <CalendarDays className="h-4 w-4" />
                   Narednih 7 dana
                 </h3>
-                <p className="text-xs text-neutral-600 mt-1 capitalize">
+                <p className="mt-1 text-xs capitalize text-neutral-600">
                   {formatDateShort(today)} – {formatDateShort(weekTo)}
                 </p>
               </div>
               <div className="text-right">
-                <p className="text-2xl font-black">
-                  {weekBooked}{" "}
-                  <span className="text-xs font-bold text-neutral-500">zakazanih termina</span>
-                </p>
-                <p className="text-xs text-neutral-500 mt-0.5">
-                  ~{weekExpected} očekivano ·{" "}
-                  <span className="text-green-400 font-bold">
-                    {fmtMoney(weekExpected * PRICE_PER_CUT)}
-                  </span>
+                <p className="text-xl font-black sm:text-2xl">{fmtMoney(weekMoney)}</p>
+                <p className="mt-0.5 text-[11px] text-neutral-500">
+                  {weekBooked} zakazanih
+                  {weekExtraMoney > 0 && ` · prognoza +${fmtMoney(weekExtraMoney)}`}
                 </p>
               </div>
             </div>
 
             <div className="space-y-2">
               {nextWeek.map((d, i) => {
-                const pct = Math.min(100, (d.booked / dayCapacity) * 100);
+                const pct = Math.min(100, (d.booked / Math.max(1, d.capacity)) * 100);
                 const perB = BARBERS.map((b) => ({
                   name: b.name,
                   n: d.items.filter((r) => r.barber === b.id).length,
@@ -1342,64 +1522,67 @@ function StatsTab() {
                 return (
                   <div
                     key={d.iso}
-                    className={`rounded-xl p-4 border ${
+                    className={`rounded-xl border p-3 sm:p-4 ${
                       i === 0
-                        ? "bg-neutral-900 border-white/25"
-                        : "bg-neutral-900/40 border-neutral-800"
+                        ? "border-white/25 bg-neutral-900"
+                        : "border-neutral-800 bg-neutral-900/40"
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="text-sm font-black capitalize w-32 shrink-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-black capitalize">
                           {formatDateShort(d.iso)}
                         </span>
                         {i === 0 && (
-                          <span className="px-2 py-0.5 text-[9px] font-black uppercase rounded-full bg-white text-black">
+                          <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-black">
                             danas
                           </span>
                         )}
-                        <span className="text-xs text-neutral-500 truncate">
-                          {perB.map((p) => `${p.name} ${p.n}`).join(" · ")}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 shrink-0">
+                      </span>
+                      <span className="flex shrink-0 items-center gap-3">
                         <span className="text-sm font-black tabular-nums">
                           {d.booked}
                           <span className="text-xs font-bold text-neutral-600">
-                            /{dayCapacity}
+                            /{d.capacity}
                           </span>
                         </span>
-                        <span className="text-sm font-black tabular-nums text-green-400 w-28 text-right">
-                          {fmtMoney(d.booked * PRICE_PER_CUT)}
+                        <span className="text-sm font-black tabular-nums text-green-400">
+                          {fmtMoney(d.money)}
                         </span>
-                      </div>
+                      </span>
                     </div>
 
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800 mt-3">
+                    <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
                       <div
                         className="h-full rounded-full bg-white transition-all duration-500"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
 
+                    {!barberId && (
+                      <p className="mt-2 truncate text-[11px] text-neutral-600">
+                        {perB.map((p) => `${p.name} ${p.n}`).join(" · ")}
+                      </p>
+                    )}
+
                     {d.items.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {d.items.map((r) => (
+                      <div className="mt-2.5 flex flex-wrap gap-1.5">
+                        {d.items.map((r, k) => (
                           <span
-                            key={r.appointment_time + r.first_name + r.barber}
-                            className="px-2 py-1 rounded-lg bg-neutral-800 border border-neutral-700 text-[11px] font-bold"
+                            key={`${r.appointment_time}-${r.barber}-${k}`}
+                            className="rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1 text-[11px] font-bold"
                           >
-                            {r.appointment_time}{" "}
-                            <span className="text-neutral-400 font-normal">
+                            {r.appointment_time}
+                            <span className="ml-1 font-normal text-neutral-400">
                               {r.first_name}
                             </span>
                           </span>
                         ))}
                       </div>
                     ) : (
-                      <p className="text-[11px] text-neutral-600 mt-3">
-                        Nema zakazanih termina
-                        {d.expected > 0 && ` · prognoza ~${d.expected}`}
+                      <p className="mt-2.5 text-[11px] text-neutral-600">
+                        Nema zakazanih
+                        {d.extra > 0 && ` · prognoza ~${d.extra}`}
                       </p>
                     )}
                   </div>
@@ -1408,69 +1591,44 @@ function StatsTab() {
             </div>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* ── Po frizeru ── */}
-            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-              <h3 className="font-black uppercase tracking-widest text-sm mb-5">
-                Termini po frizeru
-              </h3>
-              <div className="space-y-4">
-                {perBarber.map((p) => (
-                  <div key={p.name} className="flex items-center gap-3">
-                    <span className="w-16 text-sm font-bold truncate">{p.name}</span>
-                    <Bar value={p.count} max={maxBarber} />
-                    <span className="w-10 text-right text-sm font-black tabular-nums">
-                      {p.count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* ── Po danu u nedelji ── */}
-            <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-              <h3 className="font-black uppercase tracking-widest text-sm mb-5">
-                Po danu u nedelji
-              </h3>
-              <div className="space-y-3">
-                {weekdayNames.map((wd, i) => (
-                  <div key={wd} className="flex items-center gap-3">
-                    <span className="w-16 text-sm font-bold text-neutral-400">{wd}</span>
-                    <Bar value={byWeekday[i]} max={maxWd} />
-                    <span className="w-10 text-right text-sm font-black tabular-nums">
-                      {byWeekday[i]}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Najprometniji dani ── */}
-          <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6">
-            <h3 className="font-black uppercase tracking-widest text-sm mb-5">
-              Top 5 najprometnijih dana
+          {/* ── PROGNOZA DANA ── */}
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-6">
+            <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-widest">
+              <TrendingUp className="h-4 w-4" />
+              Koji dan najbolje radi
             </h3>
-            {topDays.length === 0 ? (
-              <p className="text-neutral-600 text-sm">Nema termina za ovaj mesec.</p>
-            ) : (
-              <div className="space-y-4">
-                {topDays.map(([date, count], idx) => (
-                  <div key={date} className="flex items-center gap-3">
-                    <span className="w-6 text-center font-black text-neutral-600">
-                      {idx + 1}.
+            <p className="mb-5 mt-1 text-xs text-neutral-600">
+              Prosek mušterija po danu iz poslednjih {HISTORY_WEEKS} nedelja ·
+              prosečan račun {fmtMoney(avgTicket)}
+            </p>
+            <div className="space-y-3">
+              {dayRanking.map((d, idx) => (
+                <div key={d.short} className="flex items-center gap-2 sm:gap-3">
+                  <span
+                    className={`w-5 shrink-0 text-center text-xs font-black ${
+                      idx === 0 ? "text-green-400" : "text-neutral-600"
+                    }`}
+                  >
+                    {idx + 1}
+                  </span>
+                  <span className="w-16 shrink-0 truncate text-sm font-bold capitalize sm:w-24">
+                    {d.long}
+                  </span>
+                  <Bar value={d.avg} max={maxAvg} />
+                  <span className="w-12 shrink-0 text-right text-xs font-black tabular-nums sm:w-16 sm:text-sm">
+                    ~{d.avg.toFixed(1)}
+                  </span>
+                  <span className="w-14 shrink-0 text-right text-xs font-black tabular-nums text-green-400 sm:w-24 sm:text-sm">
+                    <span className="sm:hidden">
+                      {fmtMoneyShort(d.avg * avgTicket)}
                     </span>
-                    <span className="w-32 text-sm font-bold capitalize">
-                      {formatDateShort(date)}
+                    <span className="hidden sm:inline">
+                      {fmtMoney(d.avg * avgTicket)}
                     </span>
-                    <Bar value={count} max={maxDay} />
-                    <span className="w-10 text-right text-sm font-black tabular-nums">
-                      {count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -2158,9 +2316,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "days" | "list" | "blocking" | "blacklist" | "stats"
-  >("days");
+  const [activeTab, setActiveTab] = useState<TabId>("days");
+  // Raste na svaki klik "osveži" — StatsTab ga ima u zavisnostima.
+  const [reloadKey, setReloadKey] = useState(0);
   const [listFilter, setListFilter] = useState<"all" | "booked" | "completed" | "blocked">("all");
   const [isAdmin, setIsAdmin] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
@@ -2307,6 +2465,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     setRefreshing(true);
     // ── Refresh dugme isto koristi silentFetch ──
     await silentFetch();
+    // Statistika ima svoj zahtev (drugi opseg datuma), pa je silentFetch ne
+    // dotiče — ovaj brojač je u njenim zavisnostima i tera je da se osveži.
+    setReloadKey((k) => k + 1);
     setRefreshing(false);
   };
 
@@ -2402,140 +2563,126 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   return (
     <div className="min-h-screen bg-black text-white">
       {/* ── HEADER ── */}
-      <header className="border-b border-neutral-800 bg-neutral-950 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-black tracking-tighter uppercase">Admin Dashboard</h1>
-            <p className="text-neutral-600 text-xs mt-0.5">
+      {/* Namerno NIJE lepljivo: lepljivi su tabovi ispod, a dva elementa na
+          "top-0" bi se preklopila. Pri dugoj listi termina je važnija
+          navigacija nego dugme za odjavu. */}
+      <header className="border-b border-neutral-800 bg-neutral-950">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-4 sm:py-5">
+          {/* min-w-0 + truncate: dugi mejl na telefonu gura dugmad iz ekrana */}
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-black uppercase tracking-tighter sm:text-2xl">
+              Admin Dashboard
+            </h1>
+            <p className="truncate text-[11px] text-neutral-600 sm:text-xs">
               {me?.email}
               {myBarberId && ` · ${barberName(myBarberId)}`}
               {isBoss && " · ŠEF"}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={handleManualRefresh}
               disabled={refreshing || loading}
               title="Osveži podatke"
-              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-900 hover:bg-neutral-800 transition-colors border border-neutral-800 hover:border-neutral-600 rounded-xl text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="Osveži podatke"
+              className="rounded-xl border border-neutral-800 bg-neutral-900 p-2.5 text-sm font-bold transition-colors hover:border-neutral-600 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
             </button>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-900 hover:bg-neutral-800 transition-colors border border-neutral-800 hover:border-neutral-600 rounded-xl text-sm font-bold"
+              title="Odjavi se"
+              aria-label="Odjavi se"
+              className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 p-2.5 text-sm font-bold transition-colors hover:border-neutral-600 hover:bg-neutral-800 sm:px-4"
             >
-              <LogOut className="w-4 h-4" />
-              Odjavi se
+              <LogOut className="h-4 w-4" />
+              {/* Tekst samo na širim ekranima — na telefonu ikona govori sve */}
+              <span className="hidden sm:inline">Odjavi se</span>
             </button>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-10">
+      {/* Uži bočni prostor na telefonu — px-6 je tamo trošio ekran.
+          Lepljivi tabovi ispod ponavljaju iste vrednosti u -mx/px. */}
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
 
         {/* ── ŠEF: izbor frizera čiji se raspored gleda ── */}
+        {/* Na telefonu red može da se skroluje vodoravno — tri frizera i
+            "Svi" se ne uklapaju u širinu ekrana. */}
         {isBoss && (
-          <div className="flex gap-3 mb-8 flex-wrap items-center">
-            <span className="text-xs text-neutral-600 uppercase font-black tracking-widest">
-              Frizer:
-            </span>
-            {[{ id: "all", name: "Svi" }, ...BARBERS].map((b) => (
-              <button
-                key={b.id}
-                onClick={() => setBarberView(b.id)}
-                className={`px-5 py-2 rounded-xl font-black uppercase text-sm transition-all ${
-                  barberView === b.id
-                    ? "bg-white text-black"
-                    : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
-                }`}
-              >
-                {b.name}
-              </button>
-            ))}
+          <div className="mb-6">
+            <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-neutral-600">
+              Gledaš raspored
+            </p>
+            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
+              {[{ id: "all", name: "Svi frizeri" }, ...BARBERS].map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => setBarberView(b.id)}
+                  className={`shrink-0 whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black uppercase transition-all ${
+                    barberView === b.id
+                      ? "bg-white text-black"
+                      : "border border-neutral-800 bg-neutral-900 text-white hover:border-neutral-600"
+                  }`}
+                >
+                  {b.name}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
         {/* ── STAT KARTICE ── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+        <div className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {[
             { label: "Danas", value: todayCount, color: "text-white" },
-            { label: "Zakazani ukupno", value: bookedCount, color: "text-green-400" },
+            { label: "Zakazani", value: bookedCount, color: "text-green-400" },
             { label: "Završeni", value: completedCount, color: "text-neutral-400" },
             { label: "Blokirani", value: blockedCount, color: "text-red-500" },
           ].map(({ label, value, color }) => (
             <div
               key={label}
-              className="bg-neutral-950 border border-neutral-800 rounded-2xl p-5"
+              className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4 sm:p-5"
             >
-              <p className="text-xs text-neutral-600 uppercase font-black tracking-widest mb-2">
+              <p className="mb-1.5 text-[10px] font-black uppercase tracking-widest text-neutral-600 sm:text-xs">
                 {label}
               </p>
-              <p className={`text-3xl font-black ${color}`}>{value}</p>
+              <p className={`text-2xl font-black sm:text-3xl ${color}`}>{value}</p>
             </div>
           ))}
         </div>
 
         {/* ── TABOVI ── */}
-        <div className="flex gap-3 mb-8 flex-wrap">
-          <button
-            onClick={() => setActiveTab("days")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
-              activeTab === "days"
-                ? "bg-white text-black"
-                : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
-            }`}
-          >
-            <Calendar className="w-4 h-4" />
-            Po danima
-          </button>
-          <button
-            onClick={() => setActiveTab("list")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
-              activeTab === "list"
-                ? "bg-white text-black"
-                : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
-            }`}
-          >
-            Lista svih
-          </button>
-          <button
-            onClick={() => setActiveTab("blocking")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
-              activeTab === "blocking"
-                ? "bg-red-900 text-white border border-red-700"
-                : "bg-neutral-900 text-white border border-neutral-800 hover:border-red-800"
-            }`}
-          >
-            <Ban className="w-4 h-4" />
-            Blokiranje
-          </button>
-          {/* Crna lista — blokira KLIJENTA, ne termin (vidi BlacklistTab) */}
-          <button
-            onClick={() => setActiveTab("blacklist")}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
-              activeTab === "blacklist"
-                ? "bg-red-900 text-white border border-red-700"
-                : "bg-neutral-900 text-white border border-neutral-800 hover:border-red-800"
-            }`}
-          >
-            <UserX className="w-4 h-4" />
-            Crna lista
-          </button>
-          {/* Statistika — vidi samo šef */}
-          {isBoss && (
-            <button
-              onClick={() => setActiveTab("stats")}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black uppercase text-sm transition-all ${
-                activeTab === "stats"
-                  ? "bg-white text-black"
-                  : "bg-neutral-900 text-white border border-neutral-800 hover:border-neutral-600"
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              Statistika
-            </button>
-          )}
+        {/* Lepljivi na vrhu, da se pri dugoj listi termina ne mora skrolovati
+            nazad do navigacije. Na telefonu se skroluju vodoravno i nose samo
+            ikonu + kratku oznaku. */}
+        <div className="sticky top-0 z-30 -mx-4 mb-6 border-b border-neutral-900 bg-black/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+          <div className="flex gap-2 overflow-x-auto pb-0.5">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const active = activeTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-black uppercase transition-all sm:px-5 ${
+                    active
+                      ? t.danger
+                        ? "border border-red-700 bg-red-900 text-white"
+                        : "bg-white text-black"
+                      : `border border-neutral-800 bg-neutral-900 text-white ${
+                          t.danger ? "hover:border-red-800" : "hover:border-neutral-600"
+                        }`
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="hidden sm:inline">{t.label}</span>
+                  <span className="sm:hidden">{t.short}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* ── SADRŽAJ ── */}
@@ -2554,8 +2701,17 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             onStatusChange={handleStatusChange}
             onBlockClient={blockClientFromAppointment}
           />
-        ) : activeTab === "stats" && isBoss ? (
-          <StatsTab />
+        ) : activeTab === "stats" ? (
+          // Svaki frizer vidi svoju zaradu; šef vidi onoga koga je izabrao
+          // gore ("Svi frizeri" = ceo studio). barberId je prop, pa promena
+          // izbora sama pokreće novo preuzimanje podataka.
+          // `key` nosi i reloadKey: klik na "osveži" u zaglavlju montira
+          // komponentu iznova, pa se podaci povuku ponovo (statistika ima
+          // svoj zahtev, drugi opseg datuma, koji silentFetch ne dotiče).
+          <StatsTab
+            key={`${activeBarberId}-${reloadKey}`}
+            barberId={activeBarberId}
+          />
         ) : activeTab === "blocking" ? (
           <BlockingTab barberId={blockingBarberId} />
         ) : activeTab === "blacklist" ? (
