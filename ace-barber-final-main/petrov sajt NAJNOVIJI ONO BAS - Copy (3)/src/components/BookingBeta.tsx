@@ -12,7 +12,7 @@ import {
   Crown,
 } from "lucide-react";
 import Reveal from "./Reveal";
-import { BARBERS, Barber } from "../lib/barbers";
+import { BARBERS, Barber, fetchTakenSlots } from "../lib/barbers";
 import { getDeviceId } from "../lib/device";
 
 const allTimeSlots = [
@@ -103,11 +103,10 @@ export default function BookingBeta() {
       const barberId = selectedBarber.id;
       const fetchBookedSlots = async () => {
         try {
-          const records = await pb.collection("appointments").getFullList({
-            filter: `appointment_date = "${selectedDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-            fields: "appointment_time",
-          });
-          setBookedSlots(new Set(records.map((r: any) => r.appointment_time)));
+          // Za Gavrila (zamena) ovo vraća i sve termine u kojima Marić radi.
+          setBookedSlots(
+            await fetchTakenSlots(selectedDate, barberId, allTimeSlots),
+          );
         } catch {
           setBookedSlots(new Set());
         }
@@ -405,6 +404,11 @@ export default function BookingBeta() {
                 );
               })}
             </div>
+            {currentSlots.every((t) => checkSlotAvailability(t).disabled) && (
+              <p className="mb-6 text-center text-sm text-muted-foreground">
+                Nema slobodnih termina ovog dana — izaberi drugi datum.
+              </p>
+            )}
             {hasBeard && (
               <p className="mb-6 text-center text-xs uppercase tracking-wider text-muted-foreground">
                 * Brada zahteva dva uzastopna termina
@@ -479,8 +483,8 @@ export default function BookingBeta() {
                 </div>
               )}
 
-              {/* Lista frizera — uvek 3 kolone da Petar (šef) stoji u sredini */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Lista frizera — 2×2 na telefonu, 4 u redu na većem ekranu */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {barbers.map((b) => {
                   const active = selectedBarber?.id === b.id;
                   return (

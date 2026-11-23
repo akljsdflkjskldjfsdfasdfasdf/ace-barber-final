@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { pb, Appointment, isNativeApp } from "../lib/pocketbase";
 import { onAppResume } from "../lib/native";
-import { BARBERS, barberName } from "../lib/barbers";
+import { BARBERS, CHAIR_COUNT, barberName, fetchTakenSlots } from "../lib/barbers";
 import {
   BlockedClient,
   normPhone,
@@ -209,11 +209,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
     if (!blockDate) return;
     const fetchTaken = async () => {
       try {
-        const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${blockDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-          fields: "appointment_time",
-        });
-        setBookedOnDate(new Set(records.map((r: any) => r.appointment_time)));
+        setBookedOnDate(await fetchTakenSlots(blockDate, barberId, allTimeSlots));
         setSelectedSlots(new Set());
       } catch {
         setBookedOnDate(new Set());
@@ -231,11 +227,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
     }
     const fetchTaken = async () => {
       try {
-        const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${resDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-          fields: "appointment_time",
-        });
-        setResTaken(new Set(records.map((r: any) => r.appointment_time)));
+        setResTaken(await fetchTakenSlots(resDate, barberId, allTimeSlots));
         setResSlot("");
       } catch {
         setResTaken(new Set());
@@ -273,11 +265,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
       setResName("");
       setResPhone("");
       setResSlot("");
-      const records = await pb.collection("appointments").getFullList({
-        filter: `appointment_date = "${resDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-        fields: "appointment_time",
-      });
-      setResTaken(new Set(records.map((r: any) => r.appointment_time)));
+      setResTaken(await fetchTakenSlots(resDate, barberId, allTimeSlots));
     } catch (err: any) {
       if (err?.status === 400) {
         setMsg({ type: "error", text: "Ovaj termin je već zauzet." });
@@ -459,11 +447,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
       }
       setMsg({ type: "success", text: `Blokirano ${selectedSlots.size} termina (${barberLabel}).` });
       setSelectedSlots(new Set());
-      const records = await pb.collection("appointments").getFullList({
-        filter: `appointment_date = "${blockDate}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-        fields: "appointment_time",
-      });
-      setBookedOnDate(new Set(records.map((r: any) => r.appointment_time)));
+      setBookedOnDate(await fetchTakenSlots(blockDate, barberId, allTimeSlots));
     } catch {
       setMsg({ type: "error", text: "Greška pri blokiranju." });
     }
@@ -487,11 +471,7 @@ function BlockingTab({ barberId }: { barberId: string }) {
 
     try {
       for (const date of dates) {
-        const records = await pb.collection("appointments").getFullList({
-          filter: `appointment_date = "${date}" && barber = "${barberId}" && (status = "booked" || status = "blocked")`,
-          fields: "appointment_time",
-        });
-        const takenTimes = new Set(records.map((r: any) => r.appointment_time));
+        const takenTimes = await fetchTakenSlots(date, barberId, allTimeSlots);
         const freeSlots = allTimeSlots.filter((t) => !takenTimes.has(t));
 
         for (const time of freeSlots) {
@@ -1089,9 +1069,10 @@ function StatsTab({ barberId }: { barberId: string }) {
   const wdAvg = wdSum.map((s, i) => (wdDays[i] ? s / wdDays[i] : 0));
   const hasHistory = histRows.length > 0;
 
-  // Kapacitet dana: nedeljom kraće, a za jednog frizera tri puta manji.
+  // Kapacitet dana: nedeljom kraće; ceo studio = broj stolica
+  // (Gavrilo sedi na Marićevoj stolici, pa ne dodaje kapacitet).
   const capacityFor = (iso: string) =>
-    slotsForDate(iso) * (barberId ? 1 : BARBERS.length);
+    slotsForDate(iso) * (barberId ? 1 : CHAIR_COUNT);
 
   // Koliko se JOŠ mušterija očekuje tog dana, preko već zakazanih.
   // Ograničeno brojem slobodnih termina — dan ne može da primi više.
@@ -2556,7 +2537,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           <p className="text-neutral-400 mb-6 text-sm">
             U PocketBase → kolekcija <b className="text-white">users</b> → ovaj nalog, upiši{" "}
             <b className="text-white">barber_id</b>: <code>barber-1</code> (Marić),{" "}
-            <code>barber-2</code> (Nanić) ili <code>barber-3</code> (Petar).
+            <code>barber-2</code> (Nanić), <code>barber-3</code> (Petar) ili{" "}
+            <code>barber-4</code> (Gavrilo).
             Šefu uključi i <b className="text-white">is_boss</b>. Zatim osveži ovu stranicu.
           </p>
           <button
@@ -2618,14 +2600,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
 
         {/* ── ŠEF: izbor frizera čiji se raspored gleda ── */}
-        {/* Mreža od 4 kolone na telefonu, red na širim ekranima — da sva
-            četiri dugmeta stanu odjednom, bez vodoravnog skrolovanja. */}
+        {/* Mreža od 3 kolone na telefonu (2 reda), red na širim ekranima —
+            da svih pet dugmadi stane bez vodoravnog skrolovanja. */}
         {isBoss && (
           <div className="mb-6">
             <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-neutral-600">
               Gledaš raspored
             </p>
-            <div className="grid grid-cols-4 gap-2 sm:flex">
+            <div className="grid grid-cols-3 gap-2 sm:flex">
               {[{ id: "all", name: "Svi" }, ...BARBERS].map((b) => (
                 <button
                   key={b.id}
